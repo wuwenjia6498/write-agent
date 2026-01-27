@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Apple 风格全局样式 */
+@layer base {
+  * {
+    @apply border-gray-200;
+  }
+  
+  body {
+    @apply text-gray-900;
+  }
+  
+  /* 自定义滚动条 - Apple 风格 */
+  ::-webkit-scrollbar {
+    @apply w-2 h-2;
+  }
+  
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    @apply bg-gray-300 rounded-full;
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-400;
+  }
+}
+
+@layer components {
+  /* 按钮样式 */
+  .btn-primary {
+    @apply px-4 py-2 bg-brand-primary text-white rounded-lg 
+           hover:bg-blue-700 transition-colors duration-200
+           font-medium shadow-sm;
+  }
+  
+  .btn-secondary {
+    @apply px-4 py-2 bg-white text-gray-700 rounded-lg 
+           hover:bg-gray-50 transition-colors duration-200
+           font-medium border border-gray-300;
+  }
+  
+  /* 卡片样式 */
+  .card {
+    @apply bg-white rounded-xl shadow-sm border border-gray-200
+           p-6 transition-shadow duration-200 hover:shadow-md;
+  }
+  
+  /* 输入框样式 */
+  .input {
+    @apply w-full px-4 py-2 rounded-lg border border-gray-300
+           focus:outline-none focus:ring-2 focus:ring-brand-primary
+           focus:border-transparent transition-all duration-200;
+  }
+}
+

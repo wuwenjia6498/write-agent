@@ -1,0 +1,217 @@
+{
+  "blocked_words_config": {
+    "version": "1.0",
+    "description": "全局屏蔽词库 - 用于去除AI腔调，提升内容真实感",
+    "last_updated": "2026-01-27"
+  },
+  
+  "categories": {
+    "opening_cliches": {
+      "name": "开场陈词滥调",
+      "patterns": [
+        {
+          "phrase": "在当今.*?时代",
+          "reason": "过于书面化，缺乏个性",
+          "replacement": "现在 / 这些年 / 最近"
+        },
+        {
+          "phrase": "随着.*?的发展",
+          "reason": "套话，无实际信息",
+          "replacement": "直接进入主题，删除此类铺垫"
+        },
+        {
+          "phrase": "众所周知",
+          "reason": "既然众所周知就不用说",
+          "replacement": "删除，或改为'很多人可能不知道'"
+        }
+      ]
+    },
+    
+    "logical_connectors": {
+      "name": "逻辑结构词过度使用",
+      "patterns": [
+        {
+          "phrase": "首先.*?其次.*?最后",
+          "reason": "过于程式化，缺乏自然流畅感",
+          "replacement": "用自然语言过渡，如'除此之外'、'还有个有意思的是'"
+        },
+        {
+          "phrase": "综上所述",
+          "reason": "典型AI腔，过于正式",
+          "replacement": "所以 / 这么看来 / 说到底"
+        },
+        {
+          "phrase": "总而言之",
+          "reason": "书面语过重",
+          "replacement": "简单说 / 我的看法是 / 我想说的是"
+        },
+        {
+          "phrase": "不仅.*?而且",
+          "reason": "过于书面",
+          "replacement": "改为分句表达，更口语化"
+        }
+      ]
+    },
+    
+    "vague_expressions": {
+      "name": "模糊表达",
+      "patterns": [
+        {
+          "phrase": "在一定程度上",
+          "reason": "废话，不传递信息",
+          "replacement": "删除或具体说明程度"
+        },
+        {
+          "phrase": "某种意义上",
+          "reason": "模糊无力",
+          "replacement": "具体说是什么意义"
+        },
+        {
+          "phrase": "有助于",
+          "reason": "模糊，不够直接",
+          "replacement": "能 / 可以 / 会"
+        },
+        {
+          "phrase": "相关.*?方面",
+          "reason": "废话连篇",
+          "replacement": "具体说明是什么"
+        }
+      ]
+    },
+    
+    "redundant_expressions": {
+      "name": "冗余表达",
+      "patterns": [
+        {
+          "phrase": "进行.*?活动",
+          "reason": "'进行'多余",
+          "replacement": "直接用动词，如'开展活动'→'做活动'"
+        },
+        {
+          "phrase": "实现.*?目标",
+          "reason": "'实现'多余",
+          "replacement": "达到目标 / 完成目标"
+        },
+        {
+          "phrase": "具有.*?特点",
+          "reason": "绕弯子",
+          "replacement": "是 / 有"
+        }
+      ]
+    },
+    
+    "excessive_objectivity": {
+      "name": "过度客观（缺乏态度）",
+      "patterns": [
+        {
+          "phrase": "据报道",
+          "reason": "过于新闻化，缺乏温度",
+          "replacement": "我看到 / 有报道说"
+        },
+        {
+          "phrase": "研究表明",
+          "reason": "学术腔过重",
+          "replacement": "研究发现 / 有研究说 / 科学家们发现"
+        },
+        {
+          "phrase": "值得注意的是",
+          "reason": "过于正式",
+          "replacement": "有意思的是 / 你会发现 / 特别的是"
+        }
+      ]
+    },
+    
+    "clickbait_phrases": {
+      "name": "标题党用语",
+      "patterns": [
+        {
+          "phrase": "震惊",
+          "reason": "低质量营销语言",
+          "replacement": "删除"
+        },
+        {
+          "phrase": "必看",
+          "reason": "强迫感",
+          "replacement": "删除"
+        },
+        {
+          "phrase": "速看",
+          "reason": "制造焦虑",
+          "replacement": "删除"
+        },
+        {
+          "phrase": "不看后悔",
+          "reason": "低级营销话术",
+          "replacement": "删除"
+        },
+        {
+          "phrase": "赶紧收藏",
+          "reason": "命令式，不尊重读者",
+          "replacement": "如果有用可以收藏 / 删除"
+        }
+      ]
+    },
+    
+    "educational_cliches": {
+      "name": "教育领域陈词",
+      "patterns": [
+        {
+          "phrase": "寓教于乐",
+          "reason": "空洞，缺乏实际内容",
+          "replacement": "具体说明如何让孩子感到有趣"
+        },
+        {
+          "phrase": "培养.*?能力",
+          "reason": "过于目标导向，功利化",
+          "replacement": "让孩子 / 帮助孩子"
+        },
+        {
+          "phrase": "开发潜能",
+          "reason": "商业化教育话术",
+          "replacement": "删除或具体描述"
+        },
+        {
+          "phrase": "赢在起跑线",
+          "reason": "贩卖焦虑",
+          "replacement": "删除"
+        }
+      ]
+    },
+    
+    "overly_enthusiastic": {
+      "name": "过度热情（微商风）",
+      "patterns": [
+        {
+          "phrase": "亲",
+          "reason": "微商风格，不专业",
+          "replacement": "删除"
+        },
+        {
+          "phrase": "么么哒",
+          "reason": "过于亲昵",
+          "replacement": "删除"
+        },
+        {
+          "phrase": "哦~",
+          "reason": "刻意卖萌",
+          "replacement": "删除或改为正常表达"
+        },
+        {
+          "phrase": "呢~",
+          "reason": "过度可爱化",
+          "replacement": "删除或改为'呢'"
+        }
+      ]
+    }
+  },
+  
+  "review_checklist": {
+    "sentence_length": "检查是否有超过40字的长句，拆分为短句",
+    "paragraph_length": "每段不超过200字，保持节奏感",
+    "personal_touch": "是否融入个人观察、案例或素材？",
+    "specific_examples": "是否有具体的例子而非泛泛而谈？",
+    "natural_tone": "读起来是否像人在说话，而非机器输出？",
+    "emotional_resonance": "是否有情感共鸣点，而非冷冰冰的陈述？"
+  }
+}
+

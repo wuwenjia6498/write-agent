@@ -1,0 +1,29 @@
+{
+  "name": "old-john-writing-agent",
+  "version": "1.0.0",
+  "description": "老约翰自动化写作AGENT - AI驱动的品牌内容创作平台",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "server": "cd server && uvicorn main:app --reload --port 8000"
+  },
+  "dependencies": {
+    "next": "^15.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.2"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "eslint": "^9.18.0",
+    "eslint-config-next": "^15.1.0"
+  }
+}
+
