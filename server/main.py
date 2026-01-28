@@ -21,7 +21,7 @@ app = FastAPI(
 # CORS 配置 - 允许前端访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,12 +46,14 @@ async def health_check():
     }
 
 # 导入路由模块
-from routes import channels, workflow, materials
+from routes import channels, workflow, materials, brand_assets, tasks
 
 # 注册路由
 app.include_router(channels.router, prefix="/api/channels", tags=["频道管理"])
 app.include_router(workflow.router, prefix="/api/workflow", tags=["工作流"])
 app.include_router(materials.router, prefix="/api/materials", tags=["素材管理"])
+app.include_router(brand_assets.router, prefix="/api/brand-assets", tags=["品牌资产"])
+app.include_router(tasks.router, prefix="/api/tasks", tags=["任务管理"])
 
 if __name__ == "__main__":
     import uvicorn

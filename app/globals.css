@@ -28,14 +28,116 @@
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-gray-400;
   }
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 96.1%;
+    --muted-foreground: 0 0% 45.1%;
+    --accent: 0 0% 96.1%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 3.9%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    --radius: 0.5rem
+  }
+  .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --accent: 0 0% 14.9%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 0 0% 83.1%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%
+  }
 }
 
 @layer components {
+  /* ============================================
+   * 统一字体规范 - 遵循首页设计标准
+   * ============================================ */
+  
+  /* 页面大标题 - 用于首页主标题等 */
+  .text-title-lg {
+    @apply text-4xl font-semibold text-gray-900 tracking-tight;
+  }
+  
+  /* 页面标题 - 用于内页标题 */
+  .text-title {
+    @apply text-xl font-semibold text-gray-900;
+  }
+  
+  /* 卡片/区块标题 */
+  .text-heading {
+    @apply text-lg font-semibold text-gray-900;
+  }
+  
+  /* 副标题/描述文字 */
+  .text-subtitle {
+    @apply text-base text-gray-500;
+  }
+  
+  /* 正文内容 */
+  .text-body {
+    @apply text-sm text-gray-600;
+  }
+  
+  /* 辅助说明文字 */
+  .text-caption {
+    @apply text-sm text-gray-500;
+  }
+  
+  /* 小字说明/时间戳等 */
+  .text-muted {
+    @apply text-xs text-gray-400;
+  }
+  
+  /* 链接/可点击文字 */
+  .text-link {
+    @apply text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors;
+  }
+  
+  /* 激活状态的链接 */
+  .text-link-active {
+    @apply text-sm font-medium text-[#3a5e98];
+  }
+  
   /* 按钮样式 */
   .btn-primary {
-    @apply px-4 py-2 bg-brand-primary text-white rounded-lg 
-           hover:bg-blue-700 transition-colors duration-200
-           font-medium shadow-sm;
+    @apply px-4 py-2 bg-[#3a5e98] text-white rounded-lg 
+           hover:bg-[#2d4a78] transition-colors duration-200
+           font-medium;
   }
   
   .btn-secondary {
@@ -53,8 +155,25 @@
   /* 输入框样式 */
   .input {
     @apply w-full px-4 py-2 rounded-lg border border-gray-300
-           focus:outline-none focus:ring-2 focus:ring-brand-primary
-           focus:border-transparent transition-all duration-200;
+           focus:outline-none focus:ring-2 focus:ring-[#3a5e98]/30
+           focus:border-[#3a5e98] transition-all duration-200
+           text-sm text-gray-900 placeholder:text-gray-400;
+  }
+  
+  /* 表单标签 */
+  .label {
+    @apply block text-sm font-medium text-gray-700 mb-1;
+  }
+}
+
+
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
   }
 }
 

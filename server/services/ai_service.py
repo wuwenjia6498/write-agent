@@ -7,19 +7,32 @@ from typing import AsyncIterator, Optional
 from anthropic import AsyncAnthropic
 import os
 import json
+from dotenv import load_dotenv
+from pathlib import Path
 
 class AIService:
     """AI服务类"""
     
     def __init__(self):
         """初始化AI服务"""
+        # 强制重新加载 .env 文件，覆盖系统环境变量
+        env_file = Path(__file__).parent.parent / ".env"
+        load_dotenv(env_file, override=True)
+        
         api_key = os.getenv("ANTHROPIC_API_KEY")
+        base_url = os.getenv("ANTHROPIC_BASE_URL")
+        model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+        
+        print(f"INFO: 加载配置:")
+        print(f"  - API Key: {api_key[:20] if api_key else 'None'}...")
+        print(f"  - Base URL: {base_url}")
+        print(f"  - Model: {model}")
+        
         if not api_key:
             print("WARNING: ANTHROPIC_API_KEY not set, AI functions will be disabled")
             self.client = None
         else:
             # 支持自定义API Base URL（用于第三方平台如AIHUBMIX）
-            base_url = os.getenv("ANTHROPIC_BASE_URL")
             if base_url:
                 self.client = AsyncAnthropic(
                     api_key=api_key,
@@ -30,7 +43,7 @@ class AIService:
                 self.client = AsyncAnthropic(api_key=api_key)
         
         # 支持自定义模型名称
-        self.model = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022")
+        self.model = model
     
     async def generate_content(
         self,
