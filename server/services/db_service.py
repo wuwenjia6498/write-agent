@@ -10,21 +10,34 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, DisconnectionError
 
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from database.config import SessionLocal
-from database.models import Channel, BrandAsset, PersonalMaterial, WritingTask
+from database.models import Channel, BrandAsset, PersonalMaterial, WritingTask, StyleSample
 
 
 class DatabaseService:
     """数据库服务类"""
     
     def get_db(self) -> Session:
-        """获取数据库会话"""
-        return SessionLocal()
+        """
+        获取数据库会话
+        
+        注意：pool_pre_ping 已在 engine 配置中启用，
+        SQLAlchemy 会自动检测并重建失效连接。
+        
+        Returns:
+            Session: 数据库会话
+        """
+        try:
+            return SessionLocal()
+        except (OperationalError, DisconnectionError) as e:
+            print(f"[ERROR] 数据库连接失败: {e}")
+            raise
     
     # ========================================================================
     # Channel 操作
@@ -50,24 +63,77 @@ class DatabaseService:
                 "material_tags": channel.material_tags,
                 "target_audience": channel.target_audience,
                 "brand_personality": channel.brand_personality,
-                "is_active": channel.is_active
+                "is_active": channel.is_active,
+                # 样文与风格画像 (v3.0)
+                "style_samples": getattr(channel, 'style_samples', []) or [],
+                "style_profile": getattr(channel, 'style_profile', None)
             }
         finally:
             db.close()
     
-    def get_all_channels(self) -> List[Dict[str, Any]]:
-        """获取所有活跃频道"""
+    def update_channel_style_profile(self, channel_id: str, style_profile: Dict[str, Any]) -> bool:
+        """更新频道的风格画像"""
         db = self.get_db()
         try:
-            channels = db.query(Channel).filter(Channel.is_active == True).all()
+            from sqlalchemy.orm.attributes import flag_modified
+            channel = db.query(Channel).filter(Channel.id == channel_id).first()
+            if not channel:
+                return False
+            
+            channel.style_profile = style_profile
+            flag_modified(channel, 'style_profile')
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"更新风格画像失败: {e}")
+            return False
+        finally:
+            db.close()
+    
+    def update_channel_style_samples(self, channel_id: str, style_samples: List[Dict[str, Any]]) -> bool:
+        """更新频道的标杆样文"""
+        db = self.get_db()
+        try:
+            from sqlalchemy.orm.attributes import flag_modified
+            channel = db.query(Channel).filter(Channel.id == channel_id).first()
+            if not channel:
+                return False
+            
+            channel.style_samples = style_samples
+            flag_modified(channel, 'style_samples')
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"更新标杆样文失败: {e}")
+            return False
+        finally:
+            db.close()
+    
+    def get_all_channels(self) -> List[Dict[str, Any]]:
+        """
+        获取所有活跃频道（优化版）
+        
+        使用原生 SQL 只查询必要字段，避免 ORM 加载大型 JSONB 字段
+        """
+        db = self.get_db()
+        try:
+            sql = text("""
+                SELECT id::text, name, slug, description
+                FROM channels
+                WHERE is_active = true
+                ORDER BY created_at
+            """)
+            result = db.execute(sql)
             return [
                 {
-                    "id": str(c.id),
-                    "name": c.name,
-                    "slug": c.slug,
-                    "description": c.description
+                    "id": row.id,
+                    "name": row.name,
+                    "slug": row.slug,
+                    "description": row.description
                 }
-                for c in channels
+                for row in result
             ]
         finally:
             db.close()
@@ -553,6 +619,7 @@ class DatabaseService:
                 "status": task.status,
                 "brief_data": task.brief_data,
                 "knowledge_base_data": task.knowledge_base_data,
+                "knowledge_summary": getattr(task, 'knowledge_summary', None),
                 "draft_content": task.draft_content,
                 "final_content": task.final_content,
                 "think_aloud_logs": task.think_aloud_logs,
@@ -741,59 +808,129 @@ class DatabaseService:
         finally:
             db.close()
     
+    def update_knowledge_data(
+        self,
+        task_id: str,
+        knowledge_base_data: str,
+        knowledge_summary: str
+    ) -> bool:
+        """
+        更新任务的调研数据（Step 2 专用）
+        
+        Args:
+            task_id: 任务 ID
+            knowledge_base_data: 调研全文（Markdown 格式）
+            knowledge_summary: 核心要点摘要（300字以内）
+        """
+        db = self.get_db()
+        try:
+            task = db.query(WritingTask).filter(
+                WritingTask.id == task_id
+            ).first()
+            
+            if not task:
+                return False
+            
+            task.knowledge_base_data = knowledge_base_data
+            task.knowledge_summary = knowledge_summary
+            
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"[ERROR] 更新调研数据失败: {e}")
+            return False
+        finally:
+            db.close()
+    
     def get_all_tasks(
         self,
         channel_slug: Optional[str] = None,
         status: Optional[str] = None,
         limit: int = 50
     ) -> List[Dict[str, Any]]:
-        """获取所有任务列表"""
+        """
+        获取所有任务列表（深度优化版）
+        
+        优化点：
+        1. 使用原生 SQL，避免 ORM 加载完整对象
+        2. 只查询必要字段，不加载大型 JSONB
+        3. 使用 brief_data->>'brief' 直接在数据库提取子字段
+        """
         db = self.get_db()
         try:
-            query = db.query(WritingTask)
+            # 构建参数化查询
+            params = {"limit": limit}
             
-            # 按频道筛选
+            # 动态构建 WHERE 子句
+            where_clauses = []
             if channel_slug:
-                channel = db.query(Channel).filter(Channel.slug == channel_slug).first()
-                if channel:
-                    query = query.filter(WritingTask.channel_id == channel.id)
-            
-            # 按状态筛选
+                where_clauses.append("c.slug = :channel_slug")
+                params["channel_slug"] = channel_slug
             if status:
-                query = query.filter(WritingTask.status == status)
+                where_clauses.append("t.status = :status")
+                params["status"] = status
             
-            tasks = query.order_by(WritingTask.created_at.desc()).limit(limit).all()
+            where_sql = ""
+            if where_clauses:
+                where_sql = "WHERE " + " AND ".join(where_clauses)
             
-            result = []
-            for task in tasks:
-                channel = db.query(Channel).filter(Channel.id == task.channel_id).first()
-                result.append({
-                    "id": str(task.id),
-                    "title": task.title,
-                    "channel_slug": channel.slug if channel else None,
-                    "current_step": task.current_step,
-                    "status": task.status,
-                    "created_at": task.created_at.isoformat(),
-                    "updated_at": task.updated_at.isoformat(),
-                    "brief_data": task.brief_data  # 包含 brief 信息，用于显示任务名称
-                })
+            # 原生 SQL：只查询必要字段，使用 JSONB 操作符直接提取 brief
+            sql = text(f"""
+                SELECT 
+                    t.id::text,
+                    t.title,
+                    c.slug as channel_slug,
+                    t.current_step,
+                    t.status,
+                    t.created_at,
+                    t.updated_at,
+                    t.brief_data->>'brief' as brief
+                FROM writing_tasks t
+                JOIN channels c ON t.channel_id = c.id
+                {where_sql}
+                ORDER BY t.created_at DESC
+                LIMIT :limit
+            """)
             
-            return result
+            result = db.execute(sql, params)
+            
+            return [
+                {
+                    "id": row.id,
+                    "title": row.title,
+                    "channel_slug": row.channel_slug,
+                    "current_step": row.current_step,
+                    "status": row.status,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                    "brief": row.brief
+                }
+                for row in result
+            ]
         finally:
             db.close()
     
     def delete_task(self, task_id: str) -> bool:
-        """删除任务"""
+        """
+        删除任务（优化版）
+        
+        使用原生 SQL 直接删除，避免先加载整个任务对象
+        """
         db = self.get_db()
         try:
-            task = db.query(WritingTask).filter(
-                WritingTask.id == task_id
-            ).first()
-            if not task:
-                return False
-            db.delete(task)
+            # 直接使用 DELETE 语句，不需要先加载对象
+            result = db.execute(
+                text("DELETE FROM writing_tasks WHERE id = :task_id"),
+                {"task_id": task_id}
+            )
             db.commit()
-            return True
+            # rowcount 表示受影响的行数，0 表示任务不存在
+            return result.rowcount > 0
+        except Exception as e:
+            db.rollback()
+            print(f"[ERROR] 删除任务失败: {e}")
+            return False
         finally:
             db.close()
     
@@ -808,45 +945,79 @@ class DatabaseService:
         search: Optional[str] = None,
         limit: int = 50
     ) -> List[Dict[str, Any]]:
-        """获取所有素材（支持筛选和搜索）"""
+        """
+        获取所有素材（优化版）
+        
+        使用原生 SQL + LEFT JOIN 避免 N+1 查询问题
+        """
         db = self.get_db()
         try:
-            query = db.query(PersonalMaterial)
+            # 构建参数化查询
+            params = {"limit": limit}
+            
+            # 动态构建 WHERE 子句
+            where_clauses = []
             
             # 按频道筛选
             if channel_slug:
-                channel = db.query(Channel).filter(Channel.slug == channel_slug).first()
-                if channel:
-                    query = query.filter(
-                        (PersonalMaterial.channel_id == channel.id) |
-                        (PersonalMaterial.channel_id.is_(None))
-                    )
+                where_clauses.append("(c.slug = :channel_slug OR m.channel_id IS NULL)")
+                params["channel_slug"] = channel_slug
             
             # 按类型筛选
             if material_type:
-                query = query.filter(PersonalMaterial.material_type == material_type)
+                where_clauses.append("m.material_type = :material_type")
+                params["material_type"] = material_type
             
             # 关键词搜索
             if search:
-                query = query.filter(PersonalMaterial.content.ilike(f"%{search}%"))
+                where_clauses.append("m.content ILIKE :search")
+                params["search"] = f"%{search}%"
             
-            materials = query.order_by(PersonalMaterial.created_at.desc()).limit(limit).all()
+            where_sql = ""
+            if where_clauses:
+                where_sql = "WHERE " + " AND ".join(where_clauses)
             
-            result = []
-            for m in materials:
-                channel = db.query(Channel).filter(Channel.id == m.channel_id).first() if m.channel_id else None
-                result.append({
-                    "id": str(m.id),
-                    "content": m.content,
-                    "material_type": m.material_type,
-                    "channel_id": str(m.channel_id) if m.channel_id else None,
-                    "channel_slug": channel.slug if channel else None,
-                    "tags": m.tags,
-                    "source": m.source,
-                    "created_at": m.created_at.isoformat() if m.created_at else None
-                })
+            # 原生 SQL：使用 LEFT JOIN 一次性获取频道信息
+            sql = text(f"""
+                SELECT 
+                    m.id::text,
+                    m.content,
+                    m.material_type,
+                    m.channel_id::text,
+                    c.slug as channel_slug,
+                    m.tags,
+                    m.source,
+                    m.created_at,
+                    m.style_tags,
+                    m.quality_weight,
+                    m.import_source,
+                    m.original_filename
+                FROM personal_materials m
+                LEFT JOIN channels c ON m.channel_id = c.id
+                {where_sql}
+                ORDER BY m.created_at DESC
+                LIMIT :limit
+            """)
             
-            return result
+            result = db.execute(sql, params)
+            
+            return [
+                {
+                    "id": row.id,
+                    "content": row.content,
+                    "material_type": row.material_type,
+                    "channel_id": row.channel_id,
+                    "channel_slug": row.channel_slug,
+                    "tags": row.tags,
+                    "source": row.source,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "style_tags": row.style_tags or [],
+                    "quality_weight": row.quality_weight,
+                    "import_source": row.import_source,
+                    "original_filename": row.original_filename
+                }
+                for row in result
+            ]
         finally:
             db.close()
     
@@ -856,9 +1027,26 @@ class DatabaseService:
         material_type: str,
         channel_slug: Optional[str] = None,
         tags: Optional[List[str]] = None,
-        source: Optional[str] = None
+        source: Optional[str] = None,
+        style_tags: Optional[List[str]] = None,
+        quality_weight: Optional[int] = 3,
+        import_source: Optional[str] = "manual",
+        original_filename: Optional[str] = None
     ) -> Dict[str, Any]:
-        """创建新素材"""
+        """
+        创建新素材
+        
+        Args:
+            content: 素材内容
+            material_type: 素材类型（专业资料/实操案例/心得复盘/学员反馈/其他）
+            channel_slug: 归属频道
+            tags: 关键词标签
+            source: 素材来源
+            style_tags: 风格标签（样文专用）
+            quality_weight: 质量权重 1-5（样文专用）
+            import_source: 导入来源（manual/file/url）
+            original_filename: 原始文件名
+        """
         db = self.get_db()
         try:
             channel_id = None
@@ -873,7 +1061,11 @@ class DatabaseService:
                 channel_id=channel_id,
                 tags=tags or [],
                 source=source,
-                embedding=None  # 需要后续调用 embedding 接口
+                embedding=None,  # 需要后续调用 embedding 接口
+                style_tags=style_tags or [],
+                quality_weight=quality_weight,
+                import_source=import_source,
+                original_filename=original_filename
             )
             
             db.add(material)
@@ -888,7 +1080,11 @@ class DatabaseService:
                 "channel_slug": channel_slug,
                 "tags": material.tags,
                 "source": material.source,
-                "created_at": material.created_at.isoformat() if material.created_at else None
+                "created_at": material.created_at.isoformat() if material.created_at else None,
+                "style_tags": material.style_tags or [],
+                "quality_weight": material.quality_weight,
+                "import_source": material.import_source,
+                "original_filename": material.original_filename
             }
         finally:
             db.close()
@@ -905,6 +1101,308 @@ class DatabaseService:
             db.delete(material)
             db.commit()
             return True
+        finally:
+            db.close()
+
+
+    # ========================================================================
+    # StyleSample 操作 (v3.5 - 独立表)
+    # ========================================================================
+    
+    def get_style_samples_by_channel(self, channel_id: str) -> List[Dict[str, Any]]:
+        """
+        获取频道的所有标杆样文（从独立表）
+        
+        Args:
+            channel_id: 频道 UUID 字符串
+        """
+        db = self.get_db()
+        try:
+            samples = db.query(StyleSample).filter(
+                StyleSample.channel_id == channel_id
+            ).order_by(StyleSample.created_at.desc()).all()
+            
+            return [
+                {
+                    "id": s.id,
+                    "title": s.title,
+                    "content": s.content,
+                    "source": s.source,
+                    "custom_tags": s.custom_tags or [],
+                    "ai_suggested_tags": s.ai_suggested_tags or [],
+                    "style_profile": s.style_profile,
+                    "is_analyzed": s.is_analyzed,
+                    "word_count": s.word_count,
+                    "created_at": s.created_at,
+                    "updated_at": s.updated_at
+                }
+                for s in samples
+            ]
+        except Exception as e:
+            print(f"[WARN] 获取样文失败: {e}")
+            return []
+        finally:
+            db.close()
+    
+    def get_style_sample_by_id(self, sample_id: str) -> Optional[Dict[str, Any]]:
+        """获取单篇样文详情"""
+        db = self.get_db()
+        try:
+            sample = db.query(StyleSample).filter(
+                StyleSample.id == sample_id
+            ).first()
+            
+            if not sample:
+                return None
+            
+            return {
+                "id": str(sample.id),
+                "channel_id": str(sample.channel_id),
+                "title": sample.title,
+                "content": sample.content,
+                "source": sample.source,
+                "custom_tags": sample.custom_tags or [],
+                "ai_suggested_tags": sample.ai_suggested_tags or [],
+                "style_profile": sample.style_profile,
+                "is_analyzed": sample.is_analyzed,
+                "word_count": sample.word_count,
+                "created_at": sample.created_at.isoformat() if sample.created_at else None,
+                "updated_at": sample.updated_at.isoformat() if sample.updated_at else None
+            }
+        except Exception as e:
+            print(f"[WARN] 获取样文详情失败: {e}")
+            return None
+        finally:
+            db.close()
+    
+    def count_style_samples_by_channel(self, channel_id: str) -> int:
+        """统计频道的样文数量"""
+        db = self.get_db()
+        try:
+            count = db.query(StyleSample).filter(
+                StyleSample.channel_id == channel_id
+            ).count()
+            return count
+        except Exception as e:
+            print(f"[WARN] 统计样文数量失败: {e}")
+            return 0
+        finally:
+            db.close()
+    
+    def create_style_sample(
+        self,
+        id: str,
+        channel_id: str,
+        title: str,
+        content: str,
+        source: Optional[str] = None,
+        custom_tags: Optional[List[str]] = None,
+        ai_suggested_tags: Optional[List[str]] = None,
+        style_profile: Optional[Dict[str, Any]] = None,
+        is_analyzed: bool = False,
+        word_count: Optional[int] = None
+    ) -> bool:
+        """
+        创建新的标杆样文
+        
+        Args:
+            id: 样文 UUID
+            channel_id: 频道 UUID
+            title: 样文标题
+            content: 样文内容
+            source: 来源说明
+            custom_tags: 主编定义的标签
+            ai_suggested_tags: AI 建议的标签
+            style_profile: 6 维特征分析结果
+            is_analyzed: 是否已分析
+            word_count: 字数
+        """
+        db = self.get_db()
+        try:
+            sample = StyleSample(
+                id=id,
+                channel_id=channel_id,
+                title=title,
+                content=content,
+                source=source,
+                custom_tags=custom_tags or [],
+                ai_suggested_tags=ai_suggested_tags or [],
+                style_profile=style_profile,
+                is_analyzed=is_analyzed,
+                word_count=word_count or len(content)
+            )
+            
+            db.add(sample)
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"[ERROR] 创建样文失败: {e}")
+            return False
+        finally:
+            db.close()
+    
+    def update_style_sample(
+        self,
+        sample_id: str,
+        title: Optional[str] = None,
+        source: Optional[str] = None,
+        custom_tags: Optional[List[str]] = None
+    ) -> bool:
+        """
+        更新样文基本信息（标题、来源、自定义标签）
+        """
+        db = self.get_db()
+        try:
+            sample = db.query(StyleSample).filter(
+                StyleSample.id == sample_id
+            ).first()
+            
+            if not sample:
+                return False
+            
+            if title is not None:
+                sample.title = title
+            if source is not None:
+                sample.source = source
+            if custom_tags is not None:
+                sample.custom_tags = custom_tags
+                flag_modified(sample, 'custom_tags')
+            
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"[ERROR] 更新样文失败: {e}")
+            return False
+        finally:
+            db.close()
+    
+    def update_style_sample_analysis(
+        self,
+        sample_id: str,
+        style_profile: Dict[str, Any],
+        ai_suggested_tags: Optional[List[str]] = None
+    ) -> bool:
+        """
+        更新样文的 6 维特征分析结果
+        """
+        db = self.get_db()
+        try:
+            sample = db.query(StyleSample).filter(
+                StyleSample.id == sample_id
+            ).first()
+            
+            if not sample:
+                return False
+            
+            sample.style_profile = style_profile
+            sample.is_analyzed = True
+            flag_modified(sample, 'style_profile')
+            
+            if ai_suggested_tags is not None:
+                sample.ai_suggested_tags = ai_suggested_tags
+                flag_modified(sample, 'ai_suggested_tags')
+            
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"[ERROR] 更新样文分析失败: {e}")
+            return False
+        finally:
+            db.close()
+    
+    def delete_style_sample(self, sample_id: str) -> bool:
+        """删除标杆样文"""
+        db = self.get_db()
+        try:
+            sample = db.query(StyleSample).filter(
+                StyleSample.id == sample_id
+            ).first()
+            
+            if not sample:
+                return False
+            
+            db.delete(sample)
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            print(f"[ERROR] 删除样文失败: {e}")
+            return False
+        finally:
+            db.close()
+    
+    def get_style_samples_for_matching(
+        self,
+        channel_id: str,
+        keywords: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        获取样文用于智能匹配 (Step 5 Smart Match)
+        
+        返回包含 custom_tags 和 style_profile 的样文列表
+        """
+        db = self.get_db()
+        try:
+            samples = db.query(StyleSample).filter(
+                StyleSample.channel_id == channel_id,
+                StyleSample.is_analyzed == True  # 只返回已分析的样文
+            ).all()
+            
+            result = []
+            for s in samples:
+                # 计算匹配分数（如果提供了关键词）
+                match_score = 0
+                matched_tags = []
+                
+                if keywords and s.custom_tags:
+                    for tag in s.custom_tags:
+                        for kw in keywords:
+                            if kw in tag or tag.replace('#', '') in kw:
+                                match_score += 10  # custom_tags 权重最高
+                                matched_tags.append(tag)
+                                break
+                
+                # 从 style_profile 中提取特征关键词
+                if keywords and s.style_profile:
+                    profile_keywords = []
+                    
+                    # 提取高频词
+                    if s.style_profile.get('expressions', {}).get('high_freq_words'):
+                        profile_keywords.extend(s.style_profile['expressions']['high_freq_words'])
+                    
+                    # 提取特色短语
+                    if s.style_profile.get('expressions', {}).get('characteristic_phrases'):
+                        profile_keywords.extend(s.style_profile['expressions']['characteristic_phrases'])
+                    
+                    for pk in profile_keywords:
+                        for kw in keywords:
+                            if kw in pk or pk in kw:
+                                match_score += 2  # 特征关键词权重较低
+                                break
+                
+                result.append({
+                    "id": str(s.id),
+                    "title": s.title,
+                    "content": s.content,  # 保存完整内容，用于任务详情页查看
+                    "source": s.source,
+                    "custom_tags": s.custom_tags or [],
+                    "ai_suggested_tags": s.ai_suggested_tags or [],
+                    "style_profile": s.style_profile,
+                    "word_count": s.word_count,
+                    "match_score": match_score,
+                    "matched_tags": matched_tags
+                })
+            
+            # 按匹配分数降序排列
+            result.sort(key=lambda x: x['match_score'], reverse=True)
+            
+            return result
+        except Exception as e:
+            print(f"[WARN] 获取匹配样文失败: {e}")
+            return []
         finally:
             db.close()
 

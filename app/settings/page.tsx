@@ -18,6 +18,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import BlockingWordsViewer from '@/components/BlockingWordsViewer'
 
 const API_BASE = 'http://localhost:8000/api'
 
@@ -37,20 +38,33 @@ export default function SettingsPage() {
   const [editContent, setEditContent] = useState('')
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false)
   const [newAsset, setNewAsset] = useState({ key: '', content: '', description: '' })
+  const [viewMode, setViewMode] = useState<'visual' | 'source'>('visual') // 可视化/源码视图切换
 
   useEffect(() => {
     fetchAssets()
   }, [])
 
+  // 资产显示顺序配置
+  const assetOrder = ['personal_intro', 'core_values', 'writing_principles', 'blocking_words']
+  
   const fetchAssets = async () => {
     try {
       const res = await fetch(`${API_BASE}/brand-assets/`)
       if (res.ok) {
         const data = await res.json()
-        setAssets(data)
-        if (data.length > 0 && !selectedAsset) {
-          setSelectedAsset(data[0])
-          setEditContent(data[0].content)
+        // 按指定顺序排序
+        const sortedData = [...data].sort((a, b) => {
+          const indexA = assetOrder.indexOf(a.asset_key)
+          const indexB = assetOrder.indexOf(b.asset_key)
+          // 未在列表中的项放到最后
+          const orderA = indexA === -1 ? 999 : indexA
+          const orderB = indexB === -1 ? 999 : indexB
+          return orderA - orderB
+        })
+        setAssets(sortedData)
+        if (sortedData.length > 0 && !selectedAsset) {
+          setSelectedAsset(sortedData[0])
+          setEditContent(sortedData[0].content)
         }
       }
     } catch (error) {
@@ -63,6 +77,8 @@ export default function SettingsPage() {
   const handleSelectAsset = (asset: BrandAsset) => {
     setSelectedAsset(asset)
     setEditContent(asset.content)
+    // 屏蔽词库默认使用可视化视图，其他资产使用源码视图
+    setViewMode(asset.asset_key === 'blocking_words' ? 'visual' : 'source')
   }
 
   const handleSave = async () => {
@@ -300,19 +316,37 @@ export default function SettingsPage() {
                 </CardHeader>
                 <Separator />
                 <CardContent className="pt-4">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between text-xs text-gray-500">
-                      <span>支持 Markdown 格式</span>
-                      <span>更新于 {new Date(selectedAsset.last_updated).toLocaleString()}</span>
-                    </div>
-                    <Textarea
-                      value={editContent}
-                      onChange={(e) => setEditContent(e.target.value)}
-                      rows={24}
-                      className="font-mono text-sm resize-none"
-                      placeholder="在此编辑内容..."
+                  {/* 屏蔽词库的可视化视图 */}
+                  {selectedAsset.asset_key === 'blocking_words' && viewMode === 'visual' ? (
+                    <BlockingWordsViewer 
+                      content={selectedAsset.content} 
+                      onSwitchToEdit={() => setViewMode('source')}
                     />
-                  </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs text-gray-500">
+                        <div className="flex items-center gap-3">
+                          <span>支持 Markdown 格式</span>
+                          {selectedAsset.asset_key === 'blocking_words' && (
+                            <button
+                              onClick={() => setViewMode('visual')}
+                              className="text-[#3a5e98] hover:underline"
+                            >
+                              切换到可视化视图
+                            </button>
+                          )}
+                        </div>
+                        <span>更新于 {new Date(selectedAsset.last_updated).toLocaleString()}</span>
+                      </div>
+                      <Textarea
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        rows={24}
+                        className="font-mono text-sm resize-none"
+                        placeholder="在此编辑内容..."
+                      />
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             ) : (

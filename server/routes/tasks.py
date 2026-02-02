@@ -49,20 +49,21 @@ async def list_tasks(
     status: Optional[str] = None,
     limit: int = 50
 ) -> List[TaskSummary]:
-    """获取任务列表"""
+    """
+    获取任务列表（已优化）
+    
+    优化后的数据库查询使用 JOIN，一次性加载所有数据
+    无需在路由层再次遍历提取字段
+    """
     tasks = db_service.get_all_tasks(
         channel_slug=channel_slug,
         status=status,
         limit=limit
     )
-    result = []
-    for t in tasks:
-        # 从 brief_data 中提取 brief 作为备用标题
-        brief = None
-        if t.get("brief_data") and isinstance(t["brief_data"], dict):
-            brief = t["brief_data"].get("brief")
-        
-        result.append(TaskSummary(
+    
+    # 直接映射为 TaskSummary，数据库层已优化返回格式
+    return [
+        TaskSummary(
             id=t["id"],
             title=t.get("title"),
             channel_slug=t.get("channel_slug"),
@@ -70,9 +71,10 @@ async def list_tasks(
             status=t["status"],
             created_at=t["created_at"],
             updated_at=t["updated_at"],
-            brief=brief
-        ))
-    return result
+            brief=t.get("brief")  # 数据库层已直接提取
+        )
+        for t in tasks
+    ]
 
 
 @router.get("/{task_id}")

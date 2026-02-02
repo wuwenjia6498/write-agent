@@ -43,11 +43,22 @@ def get_database_url() -> str:
 
 # 创建数据库引擎
 # pool_pre_ping=True 确保连接在使用前是有效的
+# pool_recycle=300 每 5 分钟回收连接，防止 Supabase Pooler 超时
+# connect_args 设置连接超时，避免长时间等待
 engine = create_engine(
     get_database_url(),
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
+    pool_recycle=300,  # 5 分钟回收连接
+    pool_timeout=30,   # 等待连接超时 30 秒
+    connect_args={
+        "connect_timeout": 10,  # 连接超时 10 秒
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5
+    },
     echo=os.getenv("DB_ECHO", "false").lower() == "true"  # 调试时打印 SQL
 )
 

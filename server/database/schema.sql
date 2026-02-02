@@ -123,7 +123,7 @@ CREATE INDEX IF NOT EXISTS ix_materials_channel_type ON personal_materials(chann
 COMMENT ON TABLE personal_materials IS '个人素材库表 - 存储15年来的人味碎片，支持向量语义检索';
 COMMENT ON COLUMN personal_materials.channel_id IS '归属频道ID，NULL 表示全频道通用';
 COMMENT ON COLUMN personal_materials.embedding IS '语义向量，用于相似度检索（1536维，兼容 OpenAI embeddings）';
-COMMENT ON COLUMN personal_materials.material_type IS '素材类型：金句/案例/反馈/感悟/其他';
+COMMENT ON COLUMN personal_materials.material_type IS '素材类型：专业资料/实操案例/心得复盘/学员反馈/其他';
 
 
 -- ==============================================================================

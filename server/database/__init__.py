@@ -5,7 +5,7 @@
 """
 
 from .config import get_database_url, engine, SessionLocal, get_db
-from .models import Base, Channel, BrandAsset, PersonalMaterial, WritingTask
+from .models import Base, Channel, BrandAsset, PersonalMaterial, WritingTask, StyleSample
 from . import crud
 
 __all__ = [
@@ -20,6 +20,7 @@ __all__ = [
     "BrandAsset", 
     "PersonalMaterial",
     "WritingTask",
+    "StyleSample",  # v3.5 新增
     # CRUD 操作
     "crud"
 ]

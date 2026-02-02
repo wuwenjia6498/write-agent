@@ -93,7 +93,7 @@ export default function Home() {
         
         {/* 底部说明 */}
         <p className="text-gray-400 text-xs mt-8">
-          传承15年品牌调性 · 工业化内容产出
+          © 2026 老约翰儿童阅读
         </p>
       </div>
     </main>

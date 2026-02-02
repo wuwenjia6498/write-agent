@@ -133,6 +133,23 @@ class Channel(Base):
         comment="品牌人格描述"
     )
     
+    # ========== 样文与风格画像 (v3.0 新增) ==========
+    
+    # 标杆样文 (3-5 篇，用于风格建模)
+    style_samples = Column(
+        JSONB,
+        nullable=True,
+        default=list,
+        comment="标杆样文列表，每篇包含 {id, title, content, source, added_at}"
+    )
+    
+    # 风格画像 (由 Step 5 生成)
+    style_profile = Column(
+        JSONB,
+        nullable=True,
+        comment="AI 解析生成的风格画像，包含 6 大维度分析结果"
+    )
+    
     # 状态与时间戳
     is_active = Column(
         Boolean, 
@@ -159,12 +176,156 @@ class Channel(Base):
     # 关系：一个频道有多个素材
     materials = relationship("PersonalMaterial", back_populates="channel")
     
+    # 关系：一个频道有多个标杆样文（v3.5 新增独立表关系）
+    style_samples_rel = relationship("StyleSample", back_populates="channel", cascade="all, delete-orphan")
+    
     def __repr__(self):
         return f"<Channel(id={self.id}, name='{self.name}', slug='{self.slug}')>"
 
 
 # ============================================================================
-# B. brand_assets (品牌全局资产表)
+# B. style_samples (标杆样文表 - v3.5 新增独立表)
+# 用于风格建模的参考文章，每篇独立存储 6 维特征分析结果
+# ============================================================================
+class StyleSample(Base):
+    """
+    标杆样文表（独立表结构，v3.5 升级）
+    
+    设计说明：
+    - 从 Channel.style_samples (JSONB) 迁移为独立表
+    - 每篇样文独立存储 6 维特征分析结果 (style_profile)
+    - 支持主编自定义标签 (custom_tags) 用于智能匹配
+    
+    Attributes:
+        id: 样文唯一标识 (UUID)
+        channel_id: 所属频道 (外键)
+        title: 样文标题
+        content: 样文全文内容
+        source: 来源说明
+        custom_tags: 主编定义的风格标签 (JSONB 数组)，蓝色显示
+        ai_suggested_tags: AI 建议的标签 (JSONB 数组)，灰色显示
+        style_profile: 6 维特征分析结果 (JSONB)
+        is_analyzed: 是否已完成 6 维分析
+        word_count: 字数统计
+        created_at: 创建时间
+        updated_at: 更新时间
+    """
+    __tablename__ = "style_samples"
+    
+    # 主键
+    id = Column(
+        UUID(as_uuid=True), 
+        primary_key=True, 
+        default=uuid.uuid4,
+        comment="样文唯一标识"
+    )
+    
+    # 所属频道 (外键)
+    channel_id = Column(
+        UUID(as_uuid=True), 
+        ForeignKey("channels.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+        comment="所属频道ID"
+    )
+    
+    # 样文基本信息
+    title = Column(
+        String(200),
+        nullable=False,
+        comment="样文标题"
+    )
+    
+    content = Column(
+        Text,
+        nullable=False,
+        comment="样文全文内容"
+    )
+    
+    source = Column(
+        String(200),
+        nullable=True,
+        comment="来源说明，如：公众号文章、个人博客"
+    )
+    
+    # ========== 标签系统 ==========
+    
+    # 主编定义的风格标签（蓝色显示，最高匹配权重）
+    custom_tags = Column(
+        JSONB,
+        nullable=True,
+        default=list,
+        comment="主编定义的风格标签，如：['#绘本解析', '#深度精读']"
+    )
+    
+    # AI 建议的标签（灰色显示）
+    ai_suggested_tags = Column(
+        JSONB,
+        nullable=True,
+        default=list,
+        comment="AI 分析后建议的标签"
+    )
+    
+    # ========== 6 维特征分析 ==========
+    
+    # 独立的风格分析结果（不再合成 DNA，每篇独立）
+    style_profile = Column(
+        JSONB,
+        nullable=True,
+        comment="""6 维特征分析结果 (独立指纹)：
+        {
+            "opening_style": {"type": "story_intro", "description": "...", "example": "..."},
+            "sentence_pattern": {"avg_length": 25, "short_ratio": 0.6, "description": "..."},
+            "paragraph_rhythm": {"variation": "medium", "avg_paragraph_length": 80, "description": "..."},
+            "tone": {"type": "warm_friend", "formality": 0.3, "description": "..."},
+            "ending_style": {"type": "reflection", "description": "...", "example": "..."},
+            "expressions": {"high_freq_words": [...], "transition_phrases": [...], "avoid_words": [...]}
+        }"""
+    )
+    
+    # 分析状态
+    is_analyzed = Column(
+        Boolean,
+        default=False,
+        comment="是否已完成 6 维特征分析"
+    )
+    
+    # 辅助字段
+    word_count = Column(
+        Integer,
+        nullable=True,
+        comment="样文字数"
+    )
+    
+    # 时间戳
+    created_at = Column(
+        DateTime, 
+        default=datetime.utcnow,
+        comment="创建时间"
+    )
+    
+    updated_at = Column(
+        DateTime, 
+        default=datetime.utcnow, 
+        onupdate=datetime.utcnow,
+        comment="更新时间"
+    )
+    
+    # 关系
+    channel = relationship("Channel", back_populates="style_samples_rel")
+    
+    # 索引
+    __table_args__ = (
+        # 频道索引，用于列表查询
+        Index("ix_style_samples_channel", "channel_id"),
+    )
+    
+    def __repr__(self):
+        return f"<StyleSample(id={self.id}, title='{self.title}', channel_id={self.channel_id})>"
+
+
+# ============================================================================
+# C. brand_assets (品牌全局资产表)
 # 存储品牌灵魂资料，采用 Key-Value 结构以便扩展
 # ============================================================================
 class BrandAsset(Base):
@@ -240,7 +401,12 @@ class BrandAsset(Base):
 # ============================================================================
 
 # 素材类型枚举
-MATERIAL_TYPES = ["金句", "案例", "反馈", "感悟", "其他"]
+# - 专业资料：上传PDF/Word文档，如教育理论文献、课程标准、绘本解读手册、研报数据等
+# - 实操案例：记录具体的教学过程、亲子沟通现场、绘本讲读示范等
+# - 心得复盘：项目结束后的总结、对某个教育现象的个人深度思考、教学反思日记
+# - 学员反馈：家长的咨询记录、孩子的阅读变化、课程评价截图
+# - 其他：无法归类的临时性素材
+MATERIAL_TYPES = ["专业资料", "实操案例", "心得复盘", "学员反馈", "其他"]
 
 
 class PersonalMaterial(Base):
@@ -258,7 +424,7 @@ class PersonalMaterial(Base):
         id: 唯一标识 (UUID)
         content: 原始素材文本
         channel_id: 归属频道 (外键，NULL 表示全频道通用)
-        material_type: 类型（金句/案例/反馈/感悟）
+        material_type: 类型（专业资料/实操案例/心得复盘/学员反馈/其他）
         embedding: 向量字段 (pgvector 存储 1536 维向量)
         tags: 关键词标签 (JSONB 格式)
         source: 素材来源
@@ -278,7 +444,7 @@ class PersonalMaterial(Base):
     content = Column(
         Text, 
         nullable=False,
-        comment="原始素材文本，如：揉馒头感悟、课堂金句等"
+        comment="原始素材文本，如：教学过程记录、心得复盘等"
     )
     
     # 所属频道 (外键，NULL 表示全频道通用)
@@ -295,7 +461,7 @@ class PersonalMaterial(Base):
         String(20),
         nullable=False,
         default="其他",
-        comment="素材类型：金句/案例/反馈/感悟/其他"
+        comment="素材类型：专业资料/实操案例/心得复盘/学员反馈/其他"
     )
     
     # 向量嵌入字段 (pgvector，1536 维度 - 兼容 OpenAI embeddings)
@@ -318,6 +484,39 @@ class PersonalMaterial(Base):
         String(200),
         nullable=True,
         comment="素材来源，如：2024年春季课堂"
+    )
+    
+    # ========== 样文专属字段 (v2.0 新增) ==========
+    
+    # 风格标签 (仅样文类型使用)
+    style_tags = Column(
+        JSONB,
+        nullable=True,
+        default=list,
+        comment="风格标签，如：['温润', '逻辑', '文学性', '互动感']"
+    )
+    
+    # 质量权重 (1-5，用于 RAG 检索优先级)
+    quality_weight = Column(
+        Integer,
+        nullable=True,
+        default=3,
+        comment="质量权重 1-5，用于 RAG 检索时优先调用高分样文"
+    )
+    
+    # 导入来源类型
+    import_source = Column(
+        String(20),
+        nullable=True,
+        default="manual",
+        comment="导入来源：manual(手动输入)/file(文件上传)/url(链接导入)"
+    )
+    
+    # 原始文件名 (文件上传时记录)
+    original_filename = Column(
+        String(255),
+        nullable=True,
+        comment="原始文件名，如：样文1.md"
     )
     
     # 时间戳
@@ -443,11 +642,18 @@ class WritingTask(Base):
         comment="需求简报及各步骤扩展数据"
     )
     
-    # S2: 调研结果
+    # S2: 调研结果全文
     knowledge_base_data = Column(
         Text,
         nullable=True,
-        comment="智能调研结果，支持 TEXT 或 JSON 格式"
+        comment="智能调研结果全文，支持 Markdown 格式"
+    )
+    
+    # S2: 调研摘要 (300字以内的核心要点)
+    knowledge_summary = Column(
+        Text,
+        nullable=True,
+        comment="调研核心要点摘要，300字以内，供快速预览"
     )
     
     # S7: 初稿内容
