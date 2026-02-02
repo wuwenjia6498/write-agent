@@ -1,0 +1,34 @@
+{
+  "banned_books": {
+    "description": "禁用书目（避免 AI 味）- 这些书籍被过度引用，使用会显得缺乏原创性",
+    "list": [
+      "《夏洛的网》",
+      "《小王子》",
+      "《窗边的小豆豆》",
+      "《爱心树》",
+      "《猜猜我有多爱你》",
+      "《逃家小兔》",
+      "《好饿的毛毛虫》",
+      "《大卫不可以》"
+    ],
+    "replacement_hint": "如需书籍举例，请选择更小众但同样优质的作品"
+  },
+  "word_count": {
+    "default": 1500,
+    "tolerance": 0.1,
+    "description": "默认字数 1500，允许 ±10% 偏差"
+  },
+  "sentence": {
+    "max_length": 40,
+    "description": "单句不超过 40 字，超过需拆分"
+  },
+  "paragraph": {
+    "max_length": 200,
+    "description": "单段不超过 200 字"
+  },
+  "style_dna": {
+    "pass_threshold": 0.8,
+    "description": "风格 DNA 对齐检查合格线 ≥ 80%"
+  }
+}
+

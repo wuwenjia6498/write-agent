@@ -19,10 +19,142 @@ class WorkflowEngine:
         self.configs_dir = Path(__file__).parent.parent / "configs"
     
     def load_channel_config(self, channel_id: str) -> Dict[str, Any]:
-        """加载频道配置"""
+        """
+        加载频道配置（单一数据源策略）
+        
+        读取优先级：
+        1. JSON 配置文件（configs/channels/{channel_id}.json）- 主数据源
+        2. 数据库 channels 表 - 仅作为 fallback
+        
+        设计原则：
+        - JSON 文件是配置的"真相来源"（Source of Truth）
+        - 数据库中的 channel_rules、blocked_phrases 仅用于管理界面展示
+        - 工作流执行始终以 JSON 配置为准
+        
+        Returns:
+            Dict[str, Any]: 频道配置字典
+        
+        Raises:
+            FileNotFoundError: 如果 JSON 文件和数据库都找不到配置
+        """
         config_file = self.configs_dir / "channels" / f"{channel_id}.json"
-        with open(config_file, "r", encoding="utf-8") as f:
-            return json.load(f)
+        
+        # 优先级 1: 从 JSON 配置文件加载
+        if config_file.exists():
+            with open(config_file, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                config["_source"] = "json"  # 标记数据来源，便于调试
+                return config
+        
+        # 优先级 2: Fallback 到数据库
+        from .db_service import db_service
+        channel_data = db_service.get_channel_by_slug(channel_id)
+        
+        if channel_data:
+            # 将数据库格式转换为 JSON 配置格式
+            config = self._convert_db_to_config_format(channel_data)
+            config["_source"] = "database"
+            print(f"⚠️ 警告: 频道 '{channel_id}' 从数据库加载配置，建议创建 JSON 配置文件")
+            return config
+        
+        raise FileNotFoundError(f"频道配置未找到: {channel_id}（JSON 文件和数据库均不存在）")
+    
+    def _convert_db_to_config_format(self, channel_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        将数据库频道数据转换为 JSON 配置格式
+        用于 fallback 场景
+        """
+        return {
+            "channel_id": channel_data.get("slug", ""),
+            "channel_name": channel_data.get("name", ""),
+            "description": channel_data.get("description", ""),
+            "target_audience": channel_data.get("target_audience", ""),
+            "brand_personality": channel_data.get("brand_personality", ""),
+            "system_prompt": channel_data.get("system_prompt", {
+                "role": "你是专业的内容创作专家。",
+                "writing_style": [],
+                "tone_guidelines": {}
+            }),
+            "channel_specific_rules": channel_data.get("channel_rules", {
+                "must_do": [],
+                "must_not_do": []
+            }),
+            "blocked_phrases": channel_data.get("blocked_phrases", []),
+            "material_tags": channel_data.get("material_tags", []),
+            "style_samples": channel_data.get("style_samples", []),
+            "style_profile": channel_data.get("style_profile", None)
+        }
+    
+    def sync_channel_config_to_json(self, channel_id: str) -> bool:
+        """
+        将数据库中的频道配置同步到 JSON 文件
+        
+        用途：管理界面更新数据库后，调用此方法同步到 JSON
+        
+        Args:
+            channel_id: 频道 ID（slug）
+            
+        Returns:
+            bool: 是否同步成功
+        """
+        from .db_service import db_service
+        
+        channel_data = db_service.get_channel_by_slug(channel_id)
+        if not channel_data:
+            print(f"❌ 同步失败: 数据库中找不到频道 '{channel_id}'")
+            return False
+        
+        config = self._convert_db_to_config_format(channel_data)
+        config.pop("_source", None)  # 移除来源标记
+        
+        config_file = self.configs_dir / "channels" / f"{channel_id}.json"
+        try:
+            with open(config_file, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            print(f"✅ 配置已同步: {config_file}")
+            return True
+        except Exception as e:
+            print(f"❌ 同步失败: {e}")
+            return False
+    
+    def get_config_source(self, channel_id: str) -> str:
+        """
+        获取频道配置的数据来源
+        
+        Returns:
+            str: "json" | "database" | "not_found"
+        """
+        config_file = self.configs_dir / "channels" / f"{channel_id}.json"
+        if config_file.exists():
+            return "json"
+        
+        from .db_service import db_service
+        if db_service.get_channel_by_slug(channel_id):
+            return "database"
+        
+        return "not_found"
+    
+    def load_writing_constraints(self) -> Dict[str, Any]:
+        """
+        加载全局写作约束配置
+        包含：禁用书目、字数限制、风格 DNA 合格线等
+        """
+        config_file = self.configs_dir / "global" / "writing_constraints.json"
+        if config_file.exists():
+            with open(config_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        else:
+            # 兜底默认值
+            return {
+                "banned_books": {
+                    "list": [],
+                    "replacement_hint": "请选择小众但优质的作品"
+                },
+                "word_count": {"default": 1500, "tolerance": 0.1},
+                "sentence": {"max_length": 40},
+                "paragraph": {"max_length": 200},
+                "style_dna": {"pass_threshold": 0.8}
+            }
     
     def load_blocked_words(self) -> Dict[str, Any]:
         """
@@ -307,6 +439,12 @@ class WorkflowEngine:
         Step 3: 选题讨论（必做卡点）
         """
         channel_config = self.load_channel_config(channel_id)
+        writing_constraints = self.load_writing_constraints()
+        
+        # 从配置文件加载禁用书目
+        banned_books = writing_constraints.get('banned_books', {})
+        banned_books_list = ''.join(banned_books.get('list', []))
+        banned_books_hint = banned_books.get('replacement_hint', '请选择更小众但同样优质的作品')
         
         system_prompt = f"""{channel_config['system_prompt']['role']}
 
@@ -321,8 +459,8 @@ class WorkflowEngine:
 
 ## ⚠️ 禁用书目（避免AI味）
 举例时禁止使用以下被过度引用的常见书目：
-《夏洛的网》《小王子》《窗边的小豆豆》《爱心树》《猜猜我有多爱你》《逃家小兔》《好饿的毛毛虫》《大卫不可以》
-- 如需书籍举例，请选择更小众但同样优质的作品
+{banned_books_list}
+- {banned_books_hint}
 
 写作风格要求：
 {chr(10).join(['- ' + style for style in channel_config['system_prompt']['writing_style']])}
@@ -405,7 +543,7 @@ class WorkflowEngine:
         think_aloud += "\n[样文矩阵] 正在加载样文库...\n"
         
         style_profile = None
-        recommended_sample = None
+        selected_sample = None
         all_samples = []
         
         # v3.5: 从独立表获取样文
@@ -424,16 +562,16 @@ class WorkflowEngine:
                 think_aloud += f"  - ✓ 找到 {len(all_samples)} 篇已分析的样文\n"
                 
                 # 推荐匹配度最高的样文
-                recommended_sample = all_samples[0]
-                matched_tags = recommended_sample.get('matched_tags', [])
+                selected_sample = all_samples[0]
+                matched_tags = selected_sample.get('matched_tags', [])
                 
-                think_aloud += f"\n[智能推荐] 最佳匹配样文：《{recommended_sample['title']}》\n"
+                think_aloud += f"\n[智能推荐] 最佳匹配样文：《{selected_sample['title']}》\n"
                 if matched_tags:
                     think_aloud += f"  - 匹配标签: {', '.join(matched_tags)}\n"
-                think_aloud += f"  - 匹配分数: {recommended_sample.get('match_score', 0)}\n"
+                think_aloud += f"  - 匹配分数: {selected_sample.get('match_score', 0)}\n"
                 
                 # 使用推荐样文的 style_profile 作为默认
-                style_profile = recommended_sample.get('style_profile', {})
+                style_profile = selected_sample.get('style_profile', {})
                 
                 # 展示该样文的 6 维特征摘要
                 if style_profile:
@@ -581,12 +719,12 @@ class WorkflowEngine:
                     style_summary += f"  {i}. {g}\n"
         
         sample_info = ""
-        if recommended_sample:
+        if selected_sample:
             sample_info = f"""
 ## 推荐参考样文
-- **标题**：《{recommended_sample['title']}》
-- **标签**：{', '.join(recommended_sample.get('custom_tags', []) or ['无标签'])}
-- **匹配度**：{recommended_sample.get('match_score', 0)} 分
+- **标题**：《{selected_sample['title']}》
+- **标签**：{', '.join(selected_sample.get('custom_tags', []) or ['无标签'])}
+- **匹配度**：{selected_sample.get('match_score', 0)} 分
 
 > 本次创作将参考此样文的写作范式。如需更换，请在工作台选择其他样文。
 """
@@ -615,9 +753,9 @@ class WorkflowEngine:
             "classified_materials": classified_materials,
             "style_profile": style_profile,
             # v3.5 新增：样文推荐数据
-            "recommended_sample": recommended_sample,
+            "selected_sample": selected_sample,
             "all_samples": all_samples,
-            "has_sample_recommendation": bool(recommended_sample)
+            "has_sample_recommendation": bool(selected_sample)
         }
     
     def _extract_keywords(self, text: str) -> List[str]:
@@ -706,15 +844,17 @@ class WorkflowEngine:
         channel_id: str,
         word_count: int = 1500,  # 默认字数限制
         style_profile: Dict[str, Any] = None,  # 风格画像
-        selected_sample: Dict[str, Any] = None  # v3.5: 所选的单一标杆样文
+        selected_sample: Dict[str, Any] = None,  # v3.5: 所选的单一标杆样文
+        knowledge_summary: str = ""  # v3.6: Step 2 调研摘要，用于注入事实地基
     ) -> Dict[str, Any]:
         """
-        Step 7: 初稿创作（v3.5 - 单一标杆驱动）
+        Step 7: 初稿创作（v3.6 - 单一标杆驱动 + 调研事实地基）
         
         核心变化：
         1. 优先使用所选样文的独立 style_profile（单一标杆）
         2. 如果用户修改了创作指南，人工干预覆盖样文默认特征
         3. 严禁凭空编造案例
+        4. v3.6 新增：注入 Step 2 调研摘要，确保专业论据有据可依
         
         优先级（从高到低）：
         1. 用户特殊要求 (custom_requirement)
@@ -854,57 +994,76 @@ class WorkflowEngine:
                 style_instructions += f"用户明确要求：{custom_requirement}\n"
                 style_instructions += "**必须严格执行上述特殊要求，不得忽略！**\n"
         
-        # 构建 System Prompt
+        # ================================================================
+        # v3.7: 构建 System Prompt（瘦身版 - 聚焦手感）
+        # 移除禁令类规则（屏蔽词、禁用书目、严格禁止），交由 Step 8 审校处理
+        # 优先级：调研背景 > 样文风格 > 用户特殊要求 > 频道调性
+        # ================================================================
         system_prompt = f"""{channel_config['system_prompt']['role']}
 
-## ⚠️ 核心约束：字数要求
+## 🎯 本次创作的核心目标
+在这一步，请**全神贯注于文字的流动感和对样文风格的精准复刻**。
+无需担心违禁词或用语规范，稍后会有专门的审校环节处理这些细节。
+你的任务是：写出有温度、有节奏、有真实感的初稿。
+
+## 📊 字数要求
 - 目标字数：{word_count}字
 - 允许范围：{int(word_count * 0.9)}字 ~ {int(word_count * 1.1)}字（±10%偏差）
-- 优先保证内容完整性和质量
+
 {style_instructions}
 
-## ⚠️ 核心约束：真实素材
-- 文中所有案例、故事、引用必须来自下方提供的【可用素材】
-- 严禁凭空编造任何案例或数据
-- 如果素材不够用，请简化内容而不是捏造
-
-## ⚠️ 核心约束：禁用书目（避免AI味）
-举例时禁止使用以下被过度引用的常见书目：
-《夏洛的网》《小王子》《窗边的小豆豆》《爱心树》《猜猜我有多爱你》《逃家小兔》《好饿的毛毛虫》《大卫不可以》
-- 这些书籍因过于经典已成为AI默认举例，容易让内容千篇一律
-- 如需书籍举例，请优先使用素材中提及的书目，或选择更小众但同样优质的作品
-
-## 写作风格要求
+## 📝 频道基础调性
 {chr(10).join(['- ' + style for style in channel_config['system_prompt']['writing_style']])}
 
-## 禁用表达
-{', '.join(channel_config['blocked_phrases'])}
+## ✅ 必须遵守
+{chr(10).join(['- ' + rule for rule in channel_config['channel_specific_rules']['must_do']])}
 
-## 频道规则
-必须遵守：{chr(10).join(['- ' + rule for rule in channel_config['channel_specific_rules']['must_do']])}
-严格禁止：{chr(10).join(['- ' + rule for rule in channel_config['channel_specific_rules']['must_not_do']])}
+## ⚠️ 真实素材约束
+- 文中所有案例、故事、引用必须来自下方提供的【可用素材】或【调研背景】
+- 严禁凭空编造任何案例或数据
+- 如果素材不够用，请简化内容而不是捏造
 """
         
-        # 构建 Think Aloud (v3.5 显示样文来源)
+        # 构建 Think Aloud (v3.7 专注手感模式)
         is_customized = effective_style_profile.get('is_customized', False) if effective_style_profile else False
         custom_req = effective_style_profile.get('custom_requirement', '') if effective_style_profile else ''
+        has_knowledge = bool(knowledge_summary and knowledge_summary.strip())
         
-        think_aloud = f"✍️ 开始创作初稿 (单一标杆模式)...\n\n"
+        think_aloud = f"✍️ 开始创作初稿 (专注手感模式)...\n\n"
         think_aloud += f"📍 频道：{channel_config['channel_name']}\n"
-        think_aloud += f"📍 调性：{channel_config['brand_personality']}\n"
         think_aloud += f"📍 字数要求：{word_count}字\n"
         think_aloud += f"📍 风格来源：{style_source}\n"
         
-        if is_customized:
-            think_aloud += "⚡ 用户已自定义风格配置，将优先执行用户修改的规则\n"
+        # v3.7: 显示优先级顺序
+        think_aloud += "\n🎯 本次创作优先级：\n"
+        if has_knowledge:
+            think_aloud += f"  1️⃣ 调研背景（{len(knowledge_summary)}字摘要）\n"
+        else:
+            think_aloud += "  1️⃣ 调研背景（无）\n"
+        think_aloud += f"  2️⃣ 样文风格 DNA（{style_source}）\n"
         if custom_req:
-            think_aloud += f"⚡ 特殊要求：{custom_req[:50]}...\n"
+            think_aloud += f"  3️⃣ 特殊要求：{custom_req[:30]}...\n"
+        else:
+            think_aloud += "  3️⃣ 特殊要求（无）\n"
+        think_aloud += "  4️⃣ 频道基础调性\n"
         
-        think_aloud += "\n正在融入品牌风格和真实素材..."
+        think_aloud += "\n💡 专注模式：本步骤聚焦文字流动感与风格复刻，违禁词检查将在 Step 8 执行"
+        
+        # ================================================================
+        # v3.6: 构建调研背景板块（仅在有调研数据时注入）
+        # ================================================================
+        knowledge_section = ""
+        if has_knowledge:
+            knowledge_section = f"""## 调研背景（来自 Step 2 深度调研）
+{knowledge_summary}
+
+> ⚠️ 请结合上述调研背景进行创作，确保文章的专业论据与调研结论保持一致。
+
+"""
         
         user_message = f"""请创作文章初稿。
 
-## 选题
+{knowledge_section}## 选题
 {selected_topic}
 
 ## 风格指南
@@ -917,6 +1076,7 @@ class WorkflowEngine:
 1. 文章总字数：{int(word_count * 0.9)} ~ {int(word_count * 1.1)} 字（允许±10%偏差）
 2. 严格模仿风格画像中的开头方式、句式节奏、语气特点
 3. 真实素材自然融入，禁止凭空编造案例
+{f"4. 结合【调研背景】中的专业论据，确保内容有事实支撑" if has_knowledge else ""}
 
 请开始创作，直接输出文章内容。
 """
@@ -944,12 +1104,24 @@ class WorkflowEngine:
         style_profile: Dict[str, Any] = None  # 风格画像
     ) -> Dict[str, Any]:
         """
-        Step 8: 三遍审校机制 + 风格 DNA 对齐检查
+        Step 8: 纪律审校机制（v3.7 - 接管所有禁令检查）
         
-        新增：基于风格画像的评分标准检查
+        职责：
+        1. 第一遍：去 AI 腔 - 全局屏蔽词 + 频道严格禁止项
+        2. 第二遍：黑名单校验 - 禁用书目检查
+        3. 第三遍：风格 DNA 对齐检查
+        4. 第四遍：细节打磨 + 字数控制
+        
+        反馈机制：发现违禁内容执行局部重写，而非让 Step 7 全局重来
         """
         channel_config = self.load_channel_config(channel_id)
         blocked_words_config = self.load_blocked_words()
+        writing_constraints = self.load_writing_constraints()
+        
+        # 从配置文件加载禁用书目
+        banned_books_config = writing_constraints.get('banned_books', {})
+        banned_books_list = ''.join(banned_books_config.get('list', []))
+        banned_books_hint = banned_books_config.get('replacement_hint', '请选择更小众但同样优质的作品')
         
         # 计算当前草稿字数（允许 ±10% 偏差）
         current_word_count = len(draft)
@@ -957,11 +1129,19 @@ class WorkflowEngine:
         min_allowed = int(word_count * 0.9)  # 下限：目标字数的90%
         is_over_limit = current_word_count > max_allowed
         
-        # 构建屏蔽词列表
-        blocked_phrases = []
+        # ================================================================
+        # 构建屏蔽词替换表（规则优先 + AI 兜底）
+        # ================================================================
+        blocked_phrases_with_replacement = []
         for category in blocked_words_config['categories'].values():
+            category_name = category.get('name', '未分类')
             for pattern in category['patterns']:
-                blocked_phrases.append(f"- {pattern['phrase']} → {pattern['replacement']} （原因：{pattern['reason']}）")
+                blocked_phrases_with_replacement.append(
+                    f"| {pattern['phrase']} | {pattern['replacement']} | {pattern['reason']} |"
+                )
+        
+        # 频道严格禁止项
+        channel_must_not_do = channel_config['channel_specific_rules'].get('must_not_do', [])
         
         # ================================================================
         # 构建风格 DNA 对齐检查清单
@@ -1046,65 +1226,106 @@ class WorkflowEngine:
 - 字数符合要求 ✓
 """
         
-        system_prompt = f"""你是专业的内容审校专家。请对文章进行四遍审校。
+        # ================================================================
+        # v3.8: 禁用书目从配置文件加载（writing_constraints.json）
+        # ================================================================
+        
+        system_prompt = f"""你是专业的内容审校专家，负责纪律把关和最终润色。
+请对文章进行**四遍专项审校**，发现问题直接**局部重写**修复，无需返回上一步。
+
 {word_count_instruction}
+
+---
+
+## 🔴 第一遍：去 AI 腔（最高优先级）
+
+### 全局屏蔽词替换表
+请逐一检查文章中是否包含以下词汇，如有则**必须替换**：
+
+| 禁用短语 | 替换为 | 原因 |
+|---------|-------|------|
+{chr(10).join(blocked_phrases_with_replacement[:25])}
+
+### 频道屏蔽词
+以下表达禁止出现：{', '.join(channel_config['blocked_phrases'])}
+
+### 频道严格禁止项
+{chr(10).join(['- ❌ ' + rule for rule in channel_must_not_do])}
+
+**替换原则**：
+1. **优先使用上表中的「替换为」建议**
+2. 如果替换建议不适合当前语境，可自行调整，但需保持口语化、有温度
+3. 发现违禁词后，直接在原文位置进行局部重写，保持上下文连贯
+
+---
+
+## 🟡 第二遍：黑名单校验
+
+### 禁用书目（避免 AI 味）
+检查文章中是否引用了以下被过度引用的书籍：
+{banned_books_list}
+
+**处理方式**：
+- {banned_books_hint}
+- 或者删除该书名引用，改用泛化描述
+
+---
+
+## 🟢 第三遍：风格 DNA 对齐
+
 {style_checklist}
 
-## 一审：内容审校
-- 事实准确性
-- 逻辑清晰度
-- 论证充分性
-- 是否有编造内容（严禁编造！）
+---
 
-## 二审：风格 DNA 对齐（重点！）
-对照上方《风格 DNA 对齐检查》清单，逐项打分。
-- 不符合的项必须修改
-- 对齐分数必须 ≥ 80%
+## 🔵 第四遍：细节打磨 + 字数控制
 
-## 三审：风格审校（去AI味）
-频道要求：{channel_config['brand_personality']}
+- 句子长度：拆分超过 40 字的长句
+- 段落长度：每段不超过 200 字
+- 标点符号：检查使用是否自然
+- 自然语调：读起来像人在说话
+- 【重要】确保总字数在 {min_allowed}~{max_allowed} 字范围内
 
-全局屏蔽词（必须检查）：
-{chr(10).join(blocked_phrases[:20])}  
+---
 
-频道屏蔽词：
-{', '.join(channel_config['blocked_phrases'])}
+## 📋 输出格式
 
-## 四审：细节打磨 + 字数控制
-- 句子长度（拆分超过40字的长句）
-- 段落长度（每段不超过200字）
-- 标点符号
-- 自然语调
-- 情感共鸣
-- 【重要】确保总字数在{min_allowed}~{max_allowed}字范围内（±10%偏差）
+### 审校报告
 
-输出格式：
-## 审校报告
+#### 第一遍：去 AI 腔
+| 原文 | 替换为 | 位置 |
+|-----|-------|------|
+| xxx | xxx | 第x段 |
 
-### 风格 DNA 对齐评分
+#### 第二遍：黑名单校验
+- [ ] 未发现禁用书目 / 已替换：xxx → xxx
+
+#### 第三遍：风格 DNA 对齐
 | 检查项 | 结果 | 说明 |
 |-------|------|-----|
 | 开头方式 | ✓/✗ | ... |
-| 句式特征 | ✓/✗ | ... |
-| 语气风格 | ✓/✗ | ... |
-| 结尾方式 | ✓/✗ | ... |
-| 禁词检查 | ✓/✗ | ... |
-| 创作指南1 | ✓/✗ | ... |
 | ... | ... | ... |
 
-**对齐分数：xx%**（{"需要修改" if True else "符合要求"}）
+**对齐分数：xx%**
 
-### 其他问题
-1. [内容] xxx
-2. [风格] xxx
-3. [细节] xxx
-4. [字数] 当前xxx字，{"需要精简" if is_over_limit else "符合要求"}
+#### 第四遍：细节打磨
+- 字数：当前 xxx 字（{"需要精简" if is_over_limit else "符合要求"}）
+- 长句拆分：x 处
+- 段落调整：x 处
+
+---
 
 ### 修改后版本
-（输出完整的修改后文章，确保对齐分数 ≥ 80% 且字数在{min_allowed}~{max_allowed}字范围内）
+（输出完整的修改后文章，确保所有审校问题已修复）
 """
         
-        think_aloud = f"🔍 开始四遍审校...\n\n当前字数：{current_word_count}字（目标：{word_count}字，允许范围：{min_allowed}~{max_allowed}字）\n\n第一遍：内容审校\n第二遍：风格 DNA 对齐检查\n第三遍：风格审校（去AI味）\n第四遍：细节打磨 + 字数控制"
+        think_aloud = f"🔍 开始纪律审校（v3.7）...\n\n"
+        think_aloud += f"📊 当前字数：{current_word_count}字（目标：{word_count}字，允许范围：{min_allowed}~{max_allowed}字）\n\n"
+        think_aloud += "📋 四遍专项审校流程：\n"
+        think_aloud += "  🔴 第一遍：去 AI 腔（屏蔽词替换 + 频道禁止项）\n"
+        think_aloud += "  🟡 第二遍：黑名单校验（禁用书目检查）\n"
+        think_aloud += "  🟢 第三遍：风格 DNA 对齐检查\n"
+        think_aloud += "  🔵 第四遍：细节打磨 + 字数控制\n\n"
+        think_aloud += "💡 反馈机制：发现违禁内容将执行局部重写，无需返回 Step 7"
         
         # 动态调整 max_tokens
         estimated_tokens = min(int(word_count * 2.5), 8000)  # 预留审校报告空间

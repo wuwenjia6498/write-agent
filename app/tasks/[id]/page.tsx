@@ -113,10 +113,10 @@ export default function TaskDetailPage() {
         formatted += output.style_guide
       }
       // 推荐样文信息
-      if (output?.recommended_sample) {
-        formatted += `\n\n📌 推荐标杆样文: ${output.recommended_sample.title}`
-        if (output.recommended_sample.custom_tags?.length > 0) {
-          formatted += `\n   标签: ${output.recommended_sample.custom_tags.join(', ')}`
+      if (output?.selected_sample) {
+        formatted += `\n\n📌 推荐标杆样文: ${output.selected_sample.title}`
+        if (output.selected_sample.custom_tags?.length > 0) {
+          formatted += `\n   标签: ${output.selected_sample.custom_tags.join(', ')}`
         }
       }
       // 风格画像描述
@@ -206,7 +206,7 @@ export default function TaskDetailPage() {
       let formatted = ''
       
       // 1. 推荐样文（最重要）
-      const recommendedSample = briefData.recommended_sample
+      const recommendedSample = briefData.selected_sample
       const selectedSample = briefData.selected_sample || recommendedSample
       if (selectedSample) {
         formatted += '⭐ 标杆样文\n'
@@ -319,7 +319,7 @@ export default function TaskDetailPage() {
       }
       
       // 4. 创作指南
-      const guidelines = styleProfile?.writing_guidelines || briefData.custom_style_profile?.writing_guidelines
+      const guidelines = styleProfile?.writing_guidelines || briefData.user_style_profile?.writing_guidelines
       if (guidelines?.length > 0) {
         formatted += '✏️ 创作指南\n'
         formatted += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
@@ -761,12 +761,12 @@ export default function TaskDetailPage() {
                       const briefData = task.brief_data
                       if (!briefData) return <div className="text-center py-16 text-gray-500">暂无产出内容</div>
                       
-                      const recommendedSample = briefData.recommended_sample
+                      const recommendedSample = briefData.selected_sample
                       const selectedSample = briefData.selected_sample || recommendedSample
                       const allSamples = briefData.all_samples || []
                       const styleProfile = briefData.style_profile || selectedSample?.style_profile || selectedSample?.features
                       const classifiedMaterials = briefData.classified_materials
-                      const guidelines = styleProfile?.writing_guidelines || briefData.custom_style_profile?.writing_guidelines
+                      const guidelines = styleProfile?.writing_guidelines || briefData.user_style_profile?.writing_guidelines
                       
                       // 英文类型转中文
                       const typeToZh: Record<string, string> = {

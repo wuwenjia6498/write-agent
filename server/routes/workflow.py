@@ -53,33 +53,63 @@ def db_retry(operation_name: str = "数据库操作"):
 
 def extract_word_count(step1_output: str, brief: str) -> int:
     """
-    从 Step 1 输出或原始 brief 中提取字数要求
-    返回提取到的字数，默认返回 1500
+    从用户输入或 Step 1 分析结果中提取字数要求
+    
+    优先级顺序（防止 AI 误解用户意图）：
+    1. 用户原始 brief 中的明确字数 - 最高优先级，用户说了算
+    2. Step 1 AI 分析结果 - 次优先级，AI 推断
+    3. 默认值 1500 - 兜底
+    
+    示例：
+    - 用户输入「写一篇 2000 字的文章」→ 返回 2000
+    - 用户输入「写一篇关于阅读的文章」+ Step 1 分析「期望字数：1500」→ 返回 1500
+    - 都没有字数信息 → 返回 1500（默认）
+    
+    Returns:
+        int: 提取到的字数（范围 500-10000），默认 1500
     """
-    # 常见字数表达模式
+    # 常见字数表达模式（按匹配精确度排序）
     patterns = [
-        r'期望字数[：:]\s*(\d+)',
-        r'字数[：:]\s*(\d+)',
-        r'(\d+)\s*字',
-        r'字数要求[：:]\s*(\d+)',
-        r'字数限制[：:]\s*(\d+)',
-        r'(\d{3,4})字左右',
-        r'(\d{3,4})字以内',
-        r'约(\d{3,4})字',
+        r'期望字数[：:]\s*(\d+)',      # "期望字数：2000"
+        r'字数要求[：:]\s*(\d+)',      # "字数要求：1500"
+        r'字数限制[：:]\s*(\d+)',      # "字数限制：2000"
+        r'字数[：:]\s*(\d+)',          # "字数：1800"
+        r'(\d{3,4})字左右',            # "2000字左右"
+        r'(\d{3,4})字以内',            # "1500字以内"
+        r'约(\d{3,4})字',              # "约2000字"
+        r'(\d+)\s*字',                 # "2000字" (最宽松的匹配)
     ]
     
-    # 合并搜索文本
-    search_text = f"{step1_output}\n{brief}"
+    def _extract_from_text(text: str) -> int:
+        """从文本中提取字数，返回 0 表示未找到"""
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                word_count = int(match.group(1))
+                # 合理范围检查：500-10000字
+                if 500 <= word_count <= 10000:
+                    return word_count
+        return 0
     
-    for pattern in patterns:
-        match = re.search(pattern, search_text)
-        if match:
-            word_count = int(match.group(1))
-            # 合理范围检查：500-10000字
-            if 500 <= word_count <= 10000:
-                return word_count
+    # ================================================================
+    # 优先级 1: 用户原始 brief（用户明确说的字数最重要）
+    # ================================================================
+    if brief:
+        user_word_count = _extract_from_text(brief)
+        if user_word_count > 0:
+            return user_word_count
     
-    # 默认字数
+    # ================================================================
+    # 优先级 2: Step 1 AI 分析结果（AI 推断的字数）
+    # ================================================================
+    if step1_output:
+        ai_word_count = _extract_from_text(step1_output)
+        if ai_word_count > 0:
+            return ai_word_count
+    
+    # ================================================================
+    # 优先级 3: 默认字数
+    # ================================================================
     return 1500
 
 
@@ -123,7 +153,7 @@ class ConfirmStepRequest(BaseModel):
     selected_topic: Optional[str] = Field(None, description="选定的选题 (Step 3)")
     # Step 5: 风格确认
     style_confirmed: Optional[bool] = Field(None, description="风格确认 (Step 5)")
-    custom_style_profile: Optional[Dict[str, Any]] = Field(None, description="用户自定义的风格配置 (Step 5)")
+    user_style_profile: Optional[Dict[str, Any]] = Field(None, description="用户自定义的风格配置 (Step 5)")
     selected_sample: Optional[Dict[str, Any]] = Field(None, description="v3.5: 选定的标杆样文 (Step 5)")
     # Step 6: 素材确认
     user_materials: Optional[str] = Field(None, description="用户提供的素材 (Step 6)")
@@ -363,7 +393,7 @@ async def execute_step(
                 "classified_materials": classified_materials,  # 分类素材
                 "style_profile": style_profile,
                 # v3.5: 保存样文推荐数据
-                "recommended_sample": result.get("recommended_sample"),
+                "selected_sample": result.get("selected_sample"),
                 "all_samples": result.get("all_samples", [])
             })
             db_service.add_think_aloud_log(task_id, 5, result.get("think_aloud", ""))
@@ -406,7 +436,7 @@ async def execute_step(
             }
             
         elif step_id == 7:
-            # Step 7: 初稿创作（v3.5 - 单一标杆驱动）
+            # Step 7: 初稿创作（v3.6 - 单一标杆驱动 + 调研事实地基）
             if not selected_topic:
                 selected_topic = brief_data.get("selected_topic", "")
             if not materials:
@@ -415,10 +445,13 @@ async def execute_step(
             step5_output = brief_data.get("step_5_output", "")
             
             # 优先使用用户自定义的风格配置，否则使用原始风格画像
-            style_profile = brief_data.get("custom_style_profile") or brief_data.get("style_profile", {})
+            style_profile = brief_data.get("user_style_profile") or brief_data.get("style_profile", {})
             
             # v3.5: 获取所选的单一标杆样文
             selected_sample = brief_data.get("selected_sample")
+            
+            # v3.6: 获取 Step 2 调研摘要（事实地基）
+            knowledge_summary = task.get("knowledge_summary", "") or ""
             
             # 从 Step 1 的分析结果中提取字数要求
             step1_output = brief_data.get("step_1_output", "")
@@ -427,7 +460,8 @@ async def execute_step(
             
             result = await workflow_engine.execute_step_7(
                 selected_topic, step5_output, materials, channel_id, word_count, 
-                style_profile, selected_sample  # v3.5: 传入所选样文
+                style_profile, selected_sample,
+                knowledge_summary=knowledge_summary  # v3.6: 传入调研摘要
             )
             
             # 保存初稿
@@ -442,7 +476,7 @@ async def execute_step(
             # Step 8: 四遍审校（含风格对齐检查）
             draft = task.get("draft_content") or brief_data.get("step_7_output", "")
             # 优先使用用户自定义的风格配置
-            style_profile = brief_data.get("custom_style_profile") or brief_data.get("style_profile", {})
+            style_profile = brief_data.get("user_style_profile") or brief_data.get("style_profile", {})
             
             # 从 Step 1 的分析结果中提取字数要求
             step1_output = brief_data.get("step_1_output", "")
@@ -559,10 +593,10 @@ async def confirm_checkpoint(task_id: str, request: ConfirmStepRequest):
             )
         
         # 如果用户自定义了风格配置，保存为最高指令
-        if request.custom_style_profile:
-            updates["custom_style_profile"] = request.custom_style_profile
-            custom_guidelines = request.custom_style_profile.get("writing_guidelines", [])
-            custom_req = request.custom_style_profile.get("custom_requirement", "")
+        if request.user_style_profile:
+            updates["user_style_profile"] = request.user_style_profile
+            custom_guidelines = request.user_style_profile.get("writing_guidelines", [])
+            custom_req = request.user_style_profile.get("custom_requirement", "")
             
             log_content = f"[用户确认] 已自定义风格配置（覆盖样文默认特征）\n"
             log_content += f"- 创作指南: {len(custom_guidelines)} 条\n"
@@ -815,7 +849,7 @@ async def recommend_samples(task_id: str):
     return {
         "success": True,
         "has_recommendation": bool(top_sample),
-        "recommended_sample": top_sample,
+        "selected_sample": top_sample,
         "recommendation_reason": recommendation_reason,
         "all_samples": samples,
         "keywords": keywords,
@@ -905,7 +939,7 @@ class SelectSampleRequest(BaseModel):
 
 
 @router.get("/{task_id}/recommend-samples")
-async def get_recommended_samples(task_id: str):
+async def get_selected_samples(task_id: str):
     """
     获取推荐的样文列表（基于 Brief 意图与 custom_tags 匹配）
     

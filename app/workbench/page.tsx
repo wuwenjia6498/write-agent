@@ -332,8 +332,8 @@ export default function WorkbenchPage() {
       }
       
       // v3.5: 恢复样文推荐数据
-      if (taskDetail.brief_data?.recommended_sample) {
-        setRecommendedSample(taskDetail.brief_data.recommended_sample)
+      if (taskDetail.brief_data?.selected_sample) {
+        setRecommendedSample(taskDetail.brief_data.selected_sample)
       }
       if (taskDetail.brief_data?.all_samples) {
         setAllSamples(taskDetail.brief_data.all_samples)
@@ -392,10 +392,10 @@ export default function WorkbenchPage() {
         formatted += output.style_guide
       }
       // 推荐样文信息
-      if (output?.recommended_sample) {
-        formatted += `\n\n📌 推荐标杆样文: ${output.recommended_sample.title}`
-        if (output.recommended_sample.custom_tags?.length > 0) {
-          formatted += `\n   标签: ${output.recommended_sample.custom_tags.join(', ')}`
+      if (output?.selected_sample) {
+        formatted += `\n\n📌 推荐标杆样文: ${output.selected_sample.title}`
+        if (output.selected_sample.custom_tags?.length > 0) {
+          formatted += `\n   标签: ${output.selected_sample.custom_tags.join(', ')}`
         }
       }
       // 风格画像描述
@@ -555,9 +555,9 @@ export default function WorkbenchPage() {
         setExpandedMaterial(null)
         
         // v3.5: 保存样文推荐数据
-        if (result.result?.recommended_sample) {
-          setRecommendedSample(result.result.recommended_sample)
-          setSelectedSampleId(result.result.recommended_sample.id)
+        if (result.result?.selected_sample) {
+          setRecommendedSample(result.result.selected_sample)
+          setSelectedSampleId(result.result.selected_sample.id)
         }
         if (result.result?.all_samples) {
           setAllSamples(result.result.all_samples)
@@ -729,7 +729,7 @@ export default function WorkbenchPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
             style_confirmed: true,
-            custom_style_profile: customStyleProfile,
+            user_style_profile: customStyleProfile,
             selected_sample: selectedSample  // v3.5: 传递选定的标杆样文
           })
         })
@@ -1178,6 +1178,10 @@ export default function WorkbenchPage() {
                               // 移除特殊符号的函数（包括emoji）
                               const cleanTitle = (t: string) => t.replace(/[✦✧★☆⭐◆◇●○♦♢🔹🔸🔄📌💡✨🎯📚📖🌟]/g, '').trim()
                               
+                              // 判断是否应该跳过的内容块（如"选题方向建议"）
+                              const shouldSkipBlock = (title: string) => 
+                                title.includes('选题方向建议') || title.includes('方向建议')
+                              
                               if (blocks.length > 1) {
                                 blocks.forEach((block: string, idx: number) => {
                                   const lines = block.trim().split('\n')
@@ -1185,15 +1189,20 @@ export default function WorkbenchPage() {
                                   let title = titleLine?.replace(/^#+\s*/, '').replace(/^\*\*/, '').replace(/\*\*$/, '').trim() || `选题 ${idx + 1}`
                                   title = cleanTitle(title) // 移除特殊符号
                                   if (title.length > 50) title = title.slice(0, 50) + '...'
-                                  topicBlocks.push({ title, content: block.trim() })
+                                  // 过滤掉"选题方向建议"类型的块
+                                  if (!shouldSkipBlock(title)) {
+                                    topicBlocks.push({ title, content: block.trim() })
+                                  }
                                 })
                               } else {
                                 topicBlocks.push({ title: '选题方案', content })
                               }
                               
-                              // 判断是否为"综合推荐"类型或"选题方案"（不需要折叠，不需要复制按钮）
+                              // 判断是否为"综合建议/推荐"类型（不需要折叠，不需要复制按钮，直接显示）
                               const isRecommendation = (title: string) => 
-                                title.includes('综合推荐') || title.includes('推荐') || title.includes('总结') || title === '选题方案'
+                                title.includes('综合推荐') || title.includes('综合建议') || 
+                                title.includes('推荐') || title.includes('建议') || 
+                                title.includes('总结') || title === '选题方案'
                               
                               // 判断是否需要折叠（只有一个选题方案时不折叠）
                               const needsCollapse = (title: string) => 
@@ -1209,7 +1218,7 @@ export default function WorkbenchPage() {
                                   >
                                     <span className="text-sm font-medium text-gray-800">{topic.title}</span>
                                     <div className="flex items-center gap-2">
-                                      {/* 复制按钮 - 推荐类型不显示 */}
+                                      {/* 复制按钮 - 综合建议/推荐类型不显示 */}
                                       {!isRecommendation(topic.title) && (
                                         <button
                                           onClick={(e) => {
@@ -1323,22 +1332,78 @@ export default function WorkbenchPage() {
                                       <h4 className="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
                                         <span>📦</span> 检索素材（{(materials.long?.length || 0) + (materials.short?.length || 0)} 条）
                                       </h4>
-                                      {materials.long?.map((mat: any, idx: number) => (
-                                        <div key={idx} className="bg-white rounded p-2 mb-2 text-sm">
-                                          <span className="text-xs text-gray-400">[{mat.material_type}] </span>
-                                          {mat.material_type === '专业资料' ? (
-                                            <span className="text-gray-700">📄 {mat.source || mat.title || `专业资料 ${idx + 1}`}</span>
-                                          ) : (
-                                            <span className="text-gray-700">{mat.content?.slice(0, 100)}{mat.content?.length > 100 ? '...' : ''}</span>
-                                          )}
+                                      {materials.long?.length > 0 && (
+                                        <div className="mb-3">
+                                          <p className="text-xs text-gray-500 mb-2">【长文素材】</p>
+                                          {materials.long.map((mat: any, idx: number) => {
+                                            const matId = mat.id || `view-long-${idx}`
+                                            const isProfessional = mat.material_type === '专业资料'
+                                            const isExpanded = expandedMaterial === matId
+                                            
+                                            return (
+                                              <div key={matId} className="bg-white rounded-lg p-3 mb-2">
+                                                <div className="flex items-center justify-between">
+                                                  <span className="text-xs text-gray-400">[{mat.material_type}]</span>
+                                                  {isProfessional && (
+                                                    <button
+                                                      onClick={() => setExpandedMaterial(isExpanded ? null : matId)}
+                                                      className="text-xs text-[#3a5e98] hover:underline"
+                                                    >
+                                                      {isExpanded ? '收起' : '展开查看'}
+                                                    </button>
+                                                  )}
+                                                </div>
+                                                
+                                                {isProfessional ? (
+                                                  // 专业资料：只显示文件名/来源，点击展开
+                                                  <>
+                                                    <div className="flex items-center gap-2 mt-1">
+                                                      <span className="text-gray-500">📄</span>
+                                                      <span className="text-sm font-medium text-gray-700">
+                                                        {mat.source || mat.title || `专业资料 ${idx + 1}`}
+                                                      </span>
+                                                      {mat.content_length && (
+                                                        <span className="text-xs text-gray-400">
+                                                          ({mat.content_length} 字)
+                                                        </span>
+                                                      )}
+                                                      {!mat.content_length && mat.content && (
+                                                        <span className="text-xs text-gray-400">
+                                                          ({mat.content.length} 字)
+                                                        </span>
+                                                      )}
+                                                    </div>
+                                                    {isExpanded && (
+                                                      <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
+                                                        <p className="text-sm text-gray-700 whitespace-pre-wrap">{mat.content}</p>
+                                                      </div>
+                                                    )}
+                                                  </>
+                                                ) : (
+                                                  // 其他类型：显示摘要
+                                                  <>
+                                                    <p className="text-sm text-gray-700 mt-1">
+                                                      {mat.content?.slice(0, 200)}{mat.content?.length > 200 ? '...' : ''}
+                                                    </p>
+                                                    {mat.source && <p className="text-xs text-gray-400 mt-1">来源：{mat.source}</p>}
+                                                  </>
+                                                )}
+                                              </div>
+                                            )
+                                          })}
                                         </div>
-                                      ))}
-                                      {materials.short?.map((mat: any, idx: number) => (
-                                        <div key={idx} className="text-sm text-gray-600">
-                                          <span className="text-xs text-gray-400">[{mat.material_type}] </span>
-                                          {mat.content}
+                                      )}
+                                      {materials.short?.length > 0 && (
+                                        <div>
+                                          <p className="text-xs text-gray-500 mb-2">【灵感碎片】</p>
+                                          {materials.short.map((mat: any, idx: number) => (
+                                            <div key={mat.id || `view-short-${idx}`} className="bg-white rounded p-2 mb-1 text-sm">
+                                              <span className="text-xs text-gray-400">[{mat.material_type}] </span>
+                                              <span className="text-gray-700">{mat.content}</span>
+                                            </div>
+                                          ))}
                                         </div>
-                                      ))}
+                                      )}
                                     </div>
                                   )}
                                   
@@ -1497,6 +1562,10 @@ export default function WorkbenchPage() {
                           // 移除特殊符号的函数（包括emoji）
                           const cleanTitle = (t: string) => t.replace(/[✦✧★☆⭐◆◇●○♦♢🔹🔸🔄📌💡✨🎯📚📖🌟]/g, '').trim()
                           
+                          // 判断是否应该跳过的内容块（如"选题方向建议"）
+                          const shouldSkipBlock = (title: string) => 
+                            title.includes('选题方向建议') || title.includes('方向建议')
+                          
                           // 解析每个选题块
                           if (blocks.length > 1) {
                             blocks.forEach((block: string, idx: number) => {
@@ -1506,16 +1575,21 @@ export default function WorkbenchPage() {
                               let title = titleLine?.replace(/^#+\s*/, '').replace(/^\*\*/, '').replace(/\*\*$/, '').trim() || `选题 ${idx + 1}`
                               title = cleanTitle(title) // 移除特殊符号
                               if (title.length > 50) title = title.slice(0, 50) + '...'
-                              topicBlocks.push({ title, content: block.trim() })
+                              // 过滤掉"选题方向建议"类型的块
+                              if (!shouldSkipBlock(title)) {
+                                topicBlocks.push({ title, content: block.trim() })
+                              }
                             })
                           } else {
                             // 回退：整体显示
                             topicBlocks.push({ title: '选题方案', content })
                           }
                           
-                              // 判断是否为"综合推荐"类型或"选题方案"（不需要折叠，不需要复制按钮）
+                              // 判断是否为"综合建议/推荐"类型（不需要折叠，不需要复制按钮，直接显示）
                               const isRecommendation = (title: string) => 
-                                title.includes('综合推荐') || title.includes('推荐') || title.includes('总结') || title === '选题方案'
+                                title.includes('综合推荐') || title.includes('综合建议') || 
+                                title.includes('推荐') || title.includes('建议') || 
+                                title.includes('总结') || title === '选题方案'
                               
                               // 判断是否需要折叠（只有一个选题方案时不折叠）
                               const needsCollapse = (title: string) => 

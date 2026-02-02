@@ -952,3 +952,62 @@ async def analyze_style(channel_slug: str) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"合成失败: {str(e)}")
 
+
+# ================================================================
+# 配置同步 API（单一数据源策略）
+# ================================================================
+
+@router.post("/{channel_slug}/sync-config")
+async def sync_channel_config(channel_slug: str):
+    """
+    将数据库中的频道配置同步到 JSON 配置文件
+    
+    用途：
+    - 当通过管理界面修改了数据库中的频道配置后
+    - 调用此 API 将配置同步到 JSON 文件
+    - 确保工作流引擎使用最新配置
+    
+    数据源策略：
+    - JSON 配置文件是"真相来源"（Source of Truth）
+    - 数据库仅用于管理界面的 CRUD 操作
+    - 同步操作将数据库配置写入 JSON 文件
+    """
+    from services.workflow_engine import workflow_engine
+    
+    success = workflow_engine.sync_channel_config_to_json(channel_slug)
+    
+    if success:
+        return {
+            "message": f"频道 '{channel_slug}' 配置已同步到 JSON 文件",
+            "status": "success"
+        }
+    else:
+        raise HTTPException(
+            status_code=500, 
+            detail=f"配置同步失败: 请检查频道 '{channel_slug}' 是否存在于数据库"
+        )
+
+
+@router.get("/{channel_slug}/config-source")
+async def get_channel_config_source(channel_slug: str):
+    """
+    获取频道配置的数据来源
+    
+    用于诊断配置来源，确保数据一致性
+    
+    Returns:
+        source: "json" | "database" | "not_found"
+    """
+    from services.workflow_engine import workflow_engine
+    
+    source = workflow_engine.get_config_source(channel_slug)
+    
+    return {
+        "channel_slug": channel_slug,
+        "config_source": source,
+        "description": {
+            "json": "配置来自 JSON 文件（推荐）",
+            "database": "配置来自数据库（建议同步到 JSON）",
+            "not_found": "未找到配置"
+        }.get(source, "未知")
+    }
