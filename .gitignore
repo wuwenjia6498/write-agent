@@ -42,6 +42,8 @@ __pycache__/
 venv/
 env/
 ENV/
+*.libs/
+*.dist-info/
 
 # IDEs
 .vscode/
