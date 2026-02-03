@@ -914,51 +914,38 @@ export default function TaskDetailPage() {
                                     <p className="text-xs text-gray-500 mb-2">【长文素材】</p>
                                     {classifiedMaterials.long.map((mat: any, idx: number) => {
                                       const matId = mat.id || `long-${idx}`
-                                      const isProfessional = mat.material_type === '专业资料'
                                       const isExpanded = expandedMaterialId === matId
+                                      const wordCount = mat.content_length || mat.content?.length || 0
                                       
                                       return (
                                         <div key={matId} className="bg-gray-50 rounded-lg p-3 mb-2">
+                                          {/* 头部：类型 + 展开按钮 */}
                                           <div className="flex items-center justify-between">
                                             <p className="text-xs text-gray-400">[{mat.material_type}]</p>
-                                            {isProfessional && (
-                                              <button
-                                                onClick={() => setExpandedMaterialId(isExpanded ? null : matId)}
-                                                className="text-xs text-[#3a5e98] hover:underline"
-                                              >
-                                                {isExpanded ? '收起' : '展开查看'}
-                                              </button>
-                                            )}
+                                            <button
+                                              onClick={() => setExpandedMaterialId(isExpanded ? null : matId)}
+                                              className="text-xs text-[#3a5e98] hover:underline"
+                                            >
+                                              {isExpanded ? '收起' : '展开查看'}
+                                            </button>
                                           </div>
                                           
-                                          {isProfessional ? (
-                                            // 专业资料：只显示文件名/来源，点击展开
-                                            <>
-                                              <div className="flex items-center gap-2 mt-1">
-                                                <span className="text-gray-500">📄</span>
-                                                <span className="text-sm font-medium text-gray-700">
-                                                  {mat.source || mat.title || `专业资料 ${idx + 1}`}
-                                                </span>
-                                                {mat.content_length && (
-                                                  <span className="text-xs text-gray-400">
-                                                    ({mat.content_length} 字)
-                                                  </span>
-                                                )}
-                                              </div>
-                                              {isExpanded && (
-                                                <div className="mt-3 p-3 bg-white border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
-                                                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{mat.content}</p>
-                                                </div>
-                                              )}
-                                            </>
-                                          ) : (
-                                            // 其他类型：正常显示摘要
-                                            <>
-                                              <p className="text-sm text-gray-700 mt-1">
-                                                {mat.content?.slice(0, 200)}{mat.content?.length > 200 ? '...' : ''}
-                                              </p>
-                                              {mat.source && <p className="text-xs text-gray-400 mt-1">来源：{mat.source}</p>}
-                                            </>
+                                          {/* 文件名/来源 + 字数 */}
+                                          <div className="flex items-center gap-2 mt-1">
+                                            <span className="text-gray-500">📄</span>
+                                            <span className="text-sm font-medium text-gray-700">
+                                              {mat.source || mat.title || `${mat.material_type} ${idx + 1}`}
+                                            </span>
+                                            <span className="text-xs text-gray-400">
+                                              ({wordCount} 字)
+                                            </span>
+                                          </div>
+                                          
+                                          {/* 展开后显示完整内容 */}
+                                          {isExpanded && (
+                                            <div className="mt-3 p-3 bg-white border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
+                                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{mat.content}</p>
+                                            </div>
                                           )}
                                         </div>
                                       )

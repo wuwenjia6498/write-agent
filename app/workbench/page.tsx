@@ -8,6 +8,8 @@ import ThinkAloud from '@/components/ThinkAloud'
 import ChannelSelector from '@/components/ChannelSelector'
 import { subscribeToTask } from '@/lib/supabase'
 import { API_BASE } from '@/lib/api-config'
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx'
+import { saveAs } from 'file-saver'
 
 // 步骤定义
 const WORKFLOW_STEPS = [
@@ -133,9 +135,95 @@ export default function WorkbenchPage() {
   }
   
   // ============================================================================
-  // 保存草稿
+  // Markdown 转 Word 文档辅助函数
   // ============================================================================
-  const handleSaveDraft = () => {
+  const markdownToDocx = (markdown: string): Paragraph[] => {
+    const paragraphs: Paragraph[] = []
+    const lines = markdown.split('\n')
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      
+      // 跳过空行但保留段落间距
+      if (!line.trim()) {
+        paragraphs.push(new Paragraph({ text: '' }))
+        continue
+      }
+      
+      // 处理标题
+      if (line.startsWith('# ')) {
+        paragraphs.push(new Paragraph({
+          text: line.replace(/^# /, ''),
+          heading: HeadingLevel.HEADING_1,
+          spacing: { before: 400, after: 200 }
+        }))
+      } else if (line.startsWith('## ')) {
+        paragraphs.push(new Paragraph({
+          text: line.replace(/^## /, ''),
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 300, after: 150 }
+        }))
+      } else if (line.startsWith('### ')) {
+        paragraphs.push(new Paragraph({
+          text: line.replace(/^### /, ''),
+          heading: HeadingLevel.HEADING_3,
+          spacing: { before: 200, after: 100 }
+        }))
+      } else if (line.startsWith('- ') || line.startsWith('* ')) {
+        // 处理无序列表
+        paragraphs.push(new Paragraph({
+          children: [
+            new TextRun({ text: '• ' + line.replace(/^[-*] /, '') })
+          ],
+          indent: { left: 720 },
+          spacing: { before: 100, after: 100 }
+        }))
+      } else if (/^\d+\. /.test(line)) {
+        // 处理有序列表
+        paragraphs.push(new Paragraph({
+          children: [
+            new TextRun({ text: line })
+          ],
+          indent: { left: 720 },
+          spacing: { before: 100, after: 100 }
+        }))
+      } else if (line.startsWith('> ')) {
+        // 处理引用
+        paragraphs.push(new Paragraph({
+          children: [
+            new TextRun({ text: line.replace(/^> /, ''), italics: true, color: '666666' })
+          ],
+          indent: { left: 720, right: 720 },
+          spacing: { before: 150, after: 150 }
+        }))
+      } else {
+        // 普通段落 - 处理粗体和斜体
+        const children: TextRun[] = []
+        let remaining = line
+        
+        // 简单处理：移除 Markdown 格式标记
+        remaining = remaining.replace(/\*\*(.+?)\*\*/g, '$1')  // 粗体
+        remaining = remaining.replace(/\*(.+?)\*/g, '$1')       // 斜体
+        remaining = remaining.replace(/__(.+?)__/g, '$1')       // 粗体
+        remaining = remaining.replace(/_(.+?)_/g, '$1')         // 斜体
+        
+        children.push(new TextRun({ text: remaining }))
+        
+        paragraphs.push(new Paragraph({
+          children,
+          spacing: { before: 100, after: 100 },
+          alignment: AlignmentType.JUSTIFIED
+        }))
+      }
+    }
+    
+    return paragraphs
+  }
+  
+  // ============================================================================
+  // 保存草稿（Word 格式）
+  // ============================================================================
+  const handleSaveDraft = async () => {
     // 获取当前草稿内容
     const draftContent = stepOutputs[7] || stepOutputs[currentStep] || ''
     if (!draftContent) {
@@ -143,24 +231,30 @@ export default function WorkbenchPage() {
       return
     }
     
-    // 创建下载文件
-    const blob = new Blob([draftContent], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `草稿_${new Date().toLocaleDateString()}_${taskId?.slice(0, 8) || 'draft'}.md`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-    
-    alert('草稿已保存！')
+    try {
+      // 创建 Word 文档
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: markdownToDocx(draftContent)
+        }]
+      })
+      
+      // 生成并下载
+      const blob = await Packer.toBlob(doc)
+      saveAs(blob, `草稿_${new Date().toLocaleDateString()}_${taskId?.slice(0, 8) || 'draft'}.docx`)
+      
+      alert('草稿已保存为 Word 文档！')
+    } catch (error) {
+      console.error('保存草稿失败:', error)
+      alert('保存失败，请重试')
+    }
   }
   
   // ============================================================================
-  // 导出文章
+  // 导出文章（Word 格式）
   // ============================================================================
-  const handleExportArticle = () => {
+  const handleExportArticle = async () => {
     // 优先使用终稿，否则使用草稿
     const finalContent = stepOutputs[8] || stepOutputs[7] || ''
     if (!finalContent) {
@@ -168,18 +262,24 @@ export default function WorkbenchPage() {
       return
     }
     
-    // 创建下载文件
-    const blob = new Blob([finalContent], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `文章_${selectedChannel || 'article'}_${new Date().toLocaleDateString()}.md`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    URL.revokeObjectURL(url)
-    
-    alert('文章已导出！')
+    try {
+      // 创建 Word 文档
+      const doc = new Document({
+        sections: [{
+          properties: {},
+          children: markdownToDocx(finalContent)
+        }]
+      })
+      
+      // 生成并下载
+      const blob = await Packer.toBlob(doc)
+      saveAs(blob, `文章_${selectedChannel || 'article'}_${new Date().toLocaleDateString()}.docx`)
+      
+      alert('文章已导出为 Word 文档！')
+    } catch (error) {
+      console.error('导出文章失败:', error)
+      alert('导出失败，请重试')
+    }
   }
   
   // ============================================================================
@@ -1338,56 +1438,38 @@ export default function WorkbenchPage() {
                                           <p className="text-xs text-gray-500 mb-2">【长文素材】</p>
                                           {materials.long.map((mat: any, idx: number) => {
                                             const matId = mat.id || `view-long-${idx}`
-                                            const isProfessional = mat.material_type === '专业资料'
                                             const isExpanded = expandedMaterial === matId
+                                            const wordCount = mat.content_length || mat.content?.length || 0
                                             
                                             return (
                                               <div key={matId} className="bg-white rounded-lg p-3 mb-2">
+                                                {/* 头部：类型 + 展开按钮 */}
                                                 <div className="flex items-center justify-between">
                                                   <span className="text-xs text-gray-400">[{mat.material_type}]</span>
-                                                  {isProfessional && (
-                                                    <button
-                                                      onClick={() => setExpandedMaterial(isExpanded ? null : matId)}
-                                                      className="text-xs text-[#3a5e98] hover:underline"
-                                                    >
-                                                      {isExpanded ? '收起' : '展开查看'}
-                                                    </button>
-                                                  )}
+                                                  <button
+                                                    onClick={() => setExpandedMaterial(isExpanded ? null : matId)}
+                                                    className="text-xs text-[#3a5e98] hover:underline"
+                                                  >
+                                                    {isExpanded ? '收起' : '展开查看'}
+                                                  </button>
                                                 </div>
                                                 
-                                                {isProfessional ? (
-                                                  // 专业资料：只显示文件名/来源，点击展开
-                                                  <>
-                                                    <div className="flex items-center gap-2 mt-1">
-                                                      <span className="text-gray-500">📄</span>
-                                                      <span className="text-sm font-medium text-gray-700">
-                                                        {mat.source || mat.title || `专业资料 ${idx + 1}`}
-                                                      </span>
-                                                      {mat.content_length && (
-                                                        <span className="text-xs text-gray-400">
-                                                          ({mat.content_length} 字)
-                                                        </span>
-                                                      )}
-                                                      {!mat.content_length && mat.content && (
-                                                        <span className="text-xs text-gray-400">
-                                                          ({mat.content.length} 字)
-                                                        </span>
-                                                      )}
-                                                    </div>
-                                                    {isExpanded && (
-                                                      <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
-                                                        <p className="text-sm text-gray-700 whitespace-pre-wrap">{mat.content}</p>
-                                                      </div>
-                                                    )}
-                                                  </>
-                                                ) : (
-                                                  // 其他类型：显示摘要
-                                                  <>
-                                                    <p className="text-sm text-gray-700 mt-1">
-                                                      {mat.content?.slice(0, 200)}{mat.content?.length > 200 ? '...' : ''}
-                                                    </p>
-                                                    {mat.source && <p className="text-xs text-gray-400 mt-1">来源：{mat.source}</p>}
-                                                  </>
+                                                {/* 文件名/来源 + 字数 */}
+                                                <div className="flex items-center gap-2 mt-1">
+                                                  <span className="text-gray-500">📄</span>
+                                                  <span className="text-sm font-medium text-gray-700">
+                                                    {mat.source || mat.title || `${mat.material_type} ${idx + 1}`}
+                                                  </span>
+                                                  <span className="text-xs text-gray-400">
+                                                    ({wordCount} 字)
+                                                  </span>
+                                                </div>
+                                                
+                                                {/* 展开后显示完整内容 */}
+                                                {isExpanded && (
+                                                  <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
+                                                    <p className="text-sm text-gray-700 whitespace-pre-wrap">{mat.content}</p>
+                                                  </div>
                                                 )}
                                               </div>
                                             )
