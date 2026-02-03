@@ -7,6 +7,7 @@ import WorkflowProgress from '@/components/WorkflowProgress'
 import ThinkAloud from '@/components/ThinkAloud'
 import ChannelSelector from '@/components/ChannelSelector'
 import { subscribeToTask } from '@/lib/supabase'
+import { API_BASE } from '@/lib/api-config'
 
 // 步骤定义
 const WORKFLOW_STEPS = [
@@ -114,7 +115,7 @@ export default function WorkbenchPage() {
     }
     
     try {
-      const res = await fetch(`http://localhost:8000/api/workflow/${taskId}/abort`, {
+      const res = await fetch(`${API_BASE}/workflow/${taskId}/abort`, {
         method: 'POST'
       })
       
@@ -234,7 +235,7 @@ export default function WorkbenchPage() {
   const fetchPendingTasks = async () => {
     setLoadingTasks(true)
     try {
-      const res = await fetch('http://localhost:8000/api/tasks/')
+      const res = await fetch('${API_BASE}/tasks/')
       if (res.ok) {
         const tasks = await res.json()
         // 筛选未完成的任务
@@ -259,7 +260,7 @@ export default function WorkbenchPage() {
     
     try {
       // 获取任务详细信息
-      const res = await fetch(`http://localhost:8000/api/workflow/${task.id}`)
+      const res = await fetch(`${API_BASE}/workflow/${task.id}`)
       if (!res.ok) throw new Error('获取任务详情失败')
       
       const taskDetail = await res.json()
@@ -451,7 +452,7 @@ export default function WorkbenchPage() {
     setError('')
     
     try {
-      const response = await fetch('http://localhost:8000/api/workflow/create', {
+      const response = await fetch('${API_BASE}/workflow/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -500,7 +501,7 @@ export default function WorkbenchPage() {
     
     try {
       const response = await fetch(
-        `http://localhost:8000/api/workflow/${tid}/execute-step/${stepId}`,
+        `${API_BASE}/workflow/${tid}/execute-step/${stepId}`,
         {
         method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -630,7 +631,7 @@ export default function WorkbenchPage() {
     // 如果有 taskId，同步到后端
     if (taskId) {
       try {
-        const res = await fetch(`http://localhost:8000/api/workflow/${taskId}/select-sample`, {
+        const res = await fetch(`${API_BASE}/workflow/${taskId}/select-sample`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ sample_id: sampleId })
@@ -666,7 +667,7 @@ export default function WorkbenchPage() {
       // Step 2: 调研确认
       if (currentStep === 2) {
         // 调用确认接口
-        const confirmRes = await fetch(`http://localhost:8000/api/workflow/${taskId}/confirm`, {
+        const confirmRes = await fetch(`${API_BASE}/workflow/${taskId}/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -693,7 +694,7 @@ export default function WorkbenchPage() {
         }
         
         // 调用确认接口
-        const confirmRes = await fetch(`http://localhost:8000/api/workflow/${taskId}/confirm`, {
+        const confirmRes = await fetch(`${API_BASE}/workflow/${taskId}/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ selected_topic: selectedTopic })
@@ -724,7 +725,7 @@ export default function WorkbenchPage() {
           : null
         
         // 调用确认接口，传递自定义配置和选定样文
-        const confirmRes = await fetch(`http://localhost:8000/api/workflow/${taskId}/confirm`, {
+        const confirmRes = await fetch(`${API_BASE}/workflow/${taskId}/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
@@ -757,7 +758,7 @@ export default function WorkbenchPage() {
         }
         
         // 调用确认接口
-        const confirmRes = await fetch(`http://localhost:8000/api/workflow/${taskId}/confirm`, {
+        const confirmRes = await fetch(`${API_BASE}/workflow/${taskId}/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ user_materials: userMaterials })
@@ -1695,7 +1696,7 @@ export default function WorkbenchPage() {
                                 onClick={async () => {
                                   try {
                                     setIsExecuting(true)
-                                    const res = await fetch(`http://localhost:8000/api/workflow/${taskId}/regenerate-summary`, {
+                                    const res = await fetch(`${API_BASE}/workflow/${taskId}/regenerate-summary`, {
                                       method: 'POST'
                                     })
                                     if (res.ok) {

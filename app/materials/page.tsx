@@ -26,7 +26,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 
-const API_BASE = 'http://localhost:8000/api'
+import { API_BASE } from '@/lib/api-config'
 
 // 素材类型定义（带描述）
 const MATERIAL_TYPE_CONFIG: Record<string, string> = {

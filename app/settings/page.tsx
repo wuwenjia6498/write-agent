@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/dialog'
 import BlockingWordsViewer from '@/components/BlockingWordsViewer'
 
-const API_BASE = 'http://localhost:8000/api'
+import { API_BASE } from '@/lib/api-config'
 
 interface BrandAsset {
   asset_key: string

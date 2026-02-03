@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { API_BASE } from '@/lib/api-config'
 
 interface Channel {
   channel_id: string
@@ -23,7 +24,7 @@ export default function ChannelSelector({ selectedChannel, onSelectChannel }: Pr
   useEffect(() => {
     const fetchChannels = async () => {
       try {
-        const response = await fetch('http://localhost:8000/api/channels/')
+        const response = await fetch(`${API_BASE}/channels/`)
         if (response.ok) {
           const data = await response.json()
           const formattedChannels = data.map((ch: any) => ({

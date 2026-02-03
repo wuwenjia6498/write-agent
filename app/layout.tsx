@@ -12,9 +12,8 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    // suppressHydrationWarning: 允许浏览器扩展修改 html/body 属性而不触发水合警告
-    <html lang="zh-CN" suppressHydrationWarning>
-      <body className="font-sans antialiased bg-background-primary" suppressHydrationWarning>
+    <html lang="zh-CN">
+      <body className="font-sans antialiased bg-background-primary">
         {children}
       </body>
     </html>

@@ -20,7 +20,7 @@ import {
 import { AutoResizeTextarea } from '@/components/ui/auto-resize-textarea'
 import { TagInput } from '@/components/ui/tag-input'
 
-const API_BASE = 'http://localhost:8000/api'
+import { API_BASE } from '@/lib/api-config'
 
 interface Channel {
   channel_id: string

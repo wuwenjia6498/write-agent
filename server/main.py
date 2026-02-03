@@ -27,27 +27,15 @@ app = FastAPI(
 )
 
 # CORS 配置 - 允许前端访问
-# 生产环境从环境变量读取允许的源
-allowed_origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-]
-
-# 如果设置了前端 URL，添加到允许列表
-frontend_url = os.getenv("FRONTEND_URL")
-if frontend_url:
-    allowed_origins.append(frontend_url)
-    # 也允许所有 vercel.app 子域名（用于预览部署）
-    allowed_origins.append("https://*.vercel.app")
-
-# 开发环境允许所有源（仅用于测试）
-if os.getenv("ENVIRONMENT") != "production":
-    print("[WARN] 开发环境：允许所有 CORS 源")
-    allowed_origins = ["*"]
-
+# 生产环境允许 Vercel 部署的前端域名
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3001", 
+        "https://write.skyline666.top",  # Vercel 生产域名
+        "https://write-agent.vercel.app",  # Vercel 默认域名（备用）
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -83,20 +71,10 @@ app.include_router(tasks.router, prefix="/api/tasks", tags=["任务管理"])
 
 if __name__ == "__main__":
     import uvicorn
-    
-    # Railway 需要使用动态端口
-    port = int(os.getenv("PORT", 8000))
-    
-    # 生产环境关闭 reload
-    is_production = os.getenv("ENVIRONMENT", "development") == "production"
-    
-    print(f"[INFO] 启动服务在端口: {port}")
-    print(f"[INFO] 环境: {'生产环境' if is_production else '开发环境'}")
-    
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=port,
-        reload=not is_production
+        port=8000,
+        reload=True
     )
 

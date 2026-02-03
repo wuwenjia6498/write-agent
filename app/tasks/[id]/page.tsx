@@ -13,7 +13,7 @@ import { Separator } from '@/components/ui/separator'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import DiffViewer from '@/components/DiffViewer'
 
-const API_BASE = 'http://localhost:8000/api'
+import { API_BASE } from '@/lib/api-config'
 
 const WORKFLOW_STEPS = [
   { id: 1, name: '理解需求', key: 'step_1_output' },
