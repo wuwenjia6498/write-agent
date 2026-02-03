@@ -1440,17 +1440,25 @@ export default function WorkbenchPage() {
                                             const matId = mat.id || `view-long-${idx}`
                                             const isExpanded = expandedMaterial === matId
                                             const wordCount = mat.content_length || mat.content?.length || 0
+                                            const hasAiSummary = mat.ai_summary || mat.is_summarized
                                             
                                             return (
                                               <div key={matId} className="bg-white rounded-lg p-3 mb-2">
                                                 {/* 头部：类型 + 展开按钮 */}
                                                 <div className="flex items-center justify-between">
-                                                  <span className="text-xs text-gray-400">[{mat.material_type}]</span>
+                                                  <div className="flex items-center gap-2">
+                                                    <span className="text-xs text-gray-400">[{mat.material_type}]</span>
+                                                    {hasAiSummary && (
+                                                      <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded">
+                                                        ✨ 已分析
+                                                      </span>
+                                                    )}
+                                                  </div>
                                                   <button
                                                     onClick={() => setExpandedMaterial(isExpanded ? null : matId)}
                                                     className="text-xs text-[#3a5e98] hover:underline"
                                                   >
-                                                    {isExpanded ? '收起' : '展开查看'}
+                                                    {isExpanded ? '收起原文' : '查看原文'}
                                                   </button>
                                                 </div>
                                                 
@@ -1465,9 +1473,37 @@ export default function WorkbenchPage() {
                                                   </span>
                                                 </div>
                                                 
-                                                {/* 展开后显示完整内容 */}
+                                                {/* AI 摘要（默认显示） */}
+                                                {mat.ai_summary && (
+                                                  <div className="mt-3 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-100 rounded-lg">
+                                                    <div className="flex items-center gap-1.5 mb-2">
+                                                      <span className="text-xs font-medium text-blue-700">🤖 AI 摘要</span>
+                                                    </div>
+                                                    <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                                                      {mat.ai_summary}
+                                                    </p>
+                                                  </div>
+                                                )}
+                                                
+                                                {/* 关键要点 */}
+                                                {mat.key_points && mat.key_points.length > 0 && (
+                                                  <div className="mt-2 flex flex-wrap gap-1.5">
+                                                    <span className="text-xs text-gray-500">关键要点：</span>
+                                                    {mat.key_points.map((point: string, pIdx: number) => (
+                                                      <span 
+                                                        key={pIdx} 
+                                                        className="text-xs bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full border border-amber-200"
+                                                      >
+                                                        {point}
+                                                      </span>
+                                                    ))}
+                                                  </div>
+                                                )}
+                                                
+                                                {/* 展开后显示完整原文 */}
                                                 {isExpanded && (
                                                   <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
+                                                    <p className="text-xs text-gray-500 mb-2">📜 原文内容：</p>
                                                     <p className="text-sm text-gray-700 whitespace-pre-wrap">{mat.content}</p>
                                                   </div>
                                                 )}
