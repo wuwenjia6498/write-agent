@@ -235,7 +235,7 @@ export default function WorkbenchPage() {
   const fetchPendingTasks = async () => {
     setLoadingTasks(true)
     try {
-      const res = await fetch('${API_BASE}/tasks/')
+      const res = await fetch(`${API_BASE}/tasks/`)
       if (res.ok) {
         const tasks = await res.json()
         // 筛选未完成的任务
@@ -452,7 +452,7 @@ export default function WorkbenchPage() {
     setError('')
     
     try {
-      const response = await fetch('${API_BASE}/workflow/create', {
+      const response = await fetch(`${API_BASE}/workflow/create`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
