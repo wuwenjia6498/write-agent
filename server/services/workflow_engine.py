@@ -677,21 +677,61 @@ class WorkflowEngine:
             think_aloud += f"  - 分类: {len(classified_materials['long'])} 条长文 + {len(classified_materials['short'])} 条灵感碎片\n"
         
         # ====================================================================
-        # 3. 格式化输出
+        # 2.3 长文素材摘要化（v3.7 新增）
+        # ====================================================================
+        if classified_materials['long']:
+            think_aloud += "\n[素材摘要] 正在分析长文素材...\n"
+            summarized_long = []
+            for mat in classified_materials['long']:
+                content_len = len(mat.get('content', ''))
+                if content_len >= 500:
+                    think_aloud += f"  - 分析《{mat.get('source', '未命名')}》({content_len}字)...\n"
+                    summarized_mat = await self._summarize_material(mat, selected_topic)
+                    summarized_long.append(summarized_mat)
+                else:
+                    mat['is_summarized'] = False
+                    summarized_long.append(mat)
+            classified_materials['long'] = summarized_long
+            think_aloud += f"  - ✓ 完成 {len(summarized_long)} 条长文摘要\n"
+        
+        # ====================================================================
+        # 3. 格式化输出（优化：使用摘要而非全文）
         # ====================================================================
         materials_context = ""
         if retrieved_materials:
             materials_context = "\n\n## 从素材库检索到的真实素材\n"
-            materials_context += "（以下素材来自15年积累的真实经历，请在创作中自然融入）\n\n"
+            materials_context += "（以下素材来自15年积累的真实经历，请在创作中运用这些真实案例和观点）\n\n"
             
-            for i, mat in enumerate(retrieved_materials, 1):
-                materials_context += f"### 素材{i} [{mat['material_type']}]\n"
-                materials_context += f"{mat['content']}\n"
-                if mat.get('source'):
-                    materials_context += f"*来源: {mat['source']}*\n"
+            # 长文素材：使用摘要
+            if classified_materials['long']:
+                materials_context += "### 【长文素材】\n"
+                for i, mat in enumerate(classified_materials['long'], 1):
+                    source_name = mat.get('source', f"素材{i}")
+                    materials_context += f"\n**{i}. [{mat['material_type']}] {source_name}**\n"
+                    
+                    # 优先使用 AI 摘要
+                    if mat.get('ai_summary'):
+                        materials_context += f"{mat['ai_summary']}\n"
+                    elif mat.get('summary'):
+                        materials_context += f"{mat['summary']}\n"
+                    else:
+                        # 回退：截取前300字
+                        content = mat.get('content', '')
+                        materials_context += f"{content[:300]}{'...' if len(content) > 300 else ''}\n"
+                    
+                    # 显示关键要点
+                    if mat.get('key_points'):
+                        materials_context += "**关键要点**：" + " | ".join(mat['key_points']) + "\n"
                 materials_context += "\n"
             
-            think_aloud += f"\n[RAG] 已注入 {len(retrieved_materials)} 条真实素材\n"
+            # 短碎素材：直接显示
+            if classified_materials['short']:
+                materials_context += "### 【灵感碎片】\n"
+                for mat in classified_materials['short']:
+                    materials_context += f"- [{mat['material_type']}] {mat['content']}\n"
+                materials_context += "\n"
+            
+            think_aloud += f"\n[RAG] 已处理 {len(retrieved_materials)} 条素材（{len(classified_materials['long'])} 长文 + {len(classified_materials['short'])} 碎片）\n"
         else:
             think_aloud += "\n[WARN] 素材库中暂无相关素材，请在创作时注入真实经历\n"
         
@@ -777,6 +817,84 @@ class WorkflowEngine:
         
         # 取前10个关键词
         return keywords[:10]
+    
+    async def _summarize_material(self, material: Dict[str, Any], topic: str) -> Dict[str, Any]:
+        """
+        对长文素材生成摘要和关键点（v3.7 新增）
+        
+        功能：
+        1. 提取核心论点和关键观点
+        2. 识别可引用的具体案例/数据
+        3. 生成简洁的摘要（便于 AI 理解和运用）
+        
+        Args:
+            material: 素材字典，包含 content, material_type, source 等
+            topic: 当前创作的选题，用于关联性分析
+            
+        Returns:
+            包含摘要信息的素材字典
+        """
+        content = material.get('content', '')
+        material_type = material.get('material_type', '其他')
+        source = material.get('source', '')
+        
+        # 只对超过 500 字的长文素材生成摘要
+        if len(content) < 500:
+            material['summary'] = content[:200] + '...' if len(content) > 200 else content
+            material['key_points'] = []
+            return material
+        
+        # 构建摘要提取 Prompt
+        summary_prompt = f"""请分析以下{material_type}素材，提取与当前选题相关的核心信息。
+
+【当前选题】
+{topic}
+
+【素材内容】（{len(content)}字）
+{content[:3000]}  # 限制输入长度
+
+【输出要求】
+请用以下格式输出（每项不超过50字）：
+
+**核心观点**：（一句话概括该素材的核心论点）
+
+**关键要点**：
+1. （要点1）
+2. （要点2）
+3. （要点3）
+
+**可引用内容**：（如有具体案例、数据、金句，列出1-2条最有价值的）
+
+**与选题关联**：（说明该素材如何服务于当前选题）"""
+
+        try:
+            summary_result = await ai_service.generate_content(
+                system_prompt="你是一位专业的内容分析师，擅长从长文档中提取核心信息和可引用素材。请简洁、精准地输出。",
+                user_message=summary_prompt,
+                temperature=0.3,
+                max_tokens=800
+            )
+            
+            # 解析摘要结果
+            material['ai_summary'] = summary_result
+            material['is_summarized'] = True
+            
+            # 提取关键要点（简单解析）
+            key_points = []
+            if '关键要点' in summary_result:
+                import re
+                points = re.findall(r'\d+[.、](.+?)(?=\d+[.、]|可引用|与选题|$)', summary_result, re.DOTALL)
+                key_points = [p.strip()[:100] for p in points if p.strip()][:3]
+            material['key_points'] = key_points
+            
+        except Exception as e:
+            print(f"[WARN] 素材摘要生成失败: {e}")
+            # 回退：使用简单截断
+            material['ai_summary'] = None
+            material['summary'] = content[:300] + '...'
+            material['key_points'] = []
+        
+        return material
     
     def _extract_topic_from_brief(self, brief_analysis: str) -> str:
         """

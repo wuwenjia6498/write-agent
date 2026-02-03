@@ -409,42 +409,86 @@ class DatabaseService:
         limit: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        基于关键词搜索素材（简单文本匹配，备用方案）
+        基于关键词搜索素材（优化版：内容 + 标签匹配，带相关性评分）
+        
+        优化点：
+        1. 同时匹配 content 和 tags 字段
+        2. 标签匹配的素材优先级更高
+        3. 按匹配关键词数量排序
         
         关键：必须带 channel_id 过滤，防止跨频道污染
         """
         db = self.get_db()
         try:
-            # 构建模糊搜索条件
-            query = db.query(PersonalMaterial).filter(
+            from sqlalchemy import or_, func, case, cast, String
+            
+            # 获取频道下的所有素材
+            base_query = db.query(PersonalMaterial).filter(
                 # 频道隔离：指定频道 + 全局素材
                 (PersonalMaterial.channel_id == channel_id) | 
                 (PersonalMaterial.channel_id.is_(None))
             )
             
-            # 关键词匹配
-            if keywords:
-                keyword_filters = []
+            materials = base_query.all()
+            
+            if not keywords:
+                # 无关键词时，按时间倒序返回
+                return [
+                    {
+                        "id": str(m.id),
+                        "content": m.content,
+                        "material_type": m.material_type,
+                        "tags": m.tags,
+                        "source": m.source,
+                        "match_score": 0
+                    }
+                    for m in materials[:limit]
+                ]
+            
+            # 计算每条素材的匹配分数
+            scored_materials = []
+            for m in materials:
+                score = 0
+                matched_keywords = []
+                
+                content_lower = (m.content or '').lower()
+                tags_str = ' '.join(m.tags or []).lower()
+                source_str = (m.source or '').lower()
+                
                 for kw in keywords:
-                    keyword_filters.append(
-                        PersonalMaterial.content.ilike(f"%{kw}%")
-                    )
-                # 任意关键词匹配
-                from sqlalchemy import or_
-                query = query.filter(or_(*keyword_filters))
+                    kw_lower = kw.lower()
+                    
+                    # 标签匹配（权重最高：+5）
+                    if kw_lower in tags_str:
+                        score += 5
+                        matched_keywords.append(f"[标签]{kw}")
+                    
+                    # 来源/文件名匹配（权重次高：+3）
+                    if kw_lower in source_str:
+                        score += 3
+                        matched_keywords.append(f"[来源]{kw}")
+                    
+                    # 内容匹配（基础权重：+1）
+                    if kw_lower in content_lower:
+                        score += 1
+                        if f"[标签]{kw}" not in matched_keywords and f"[来源]{kw}" not in matched_keywords:
+                            matched_keywords.append(kw)
+                
+                if score > 0:
+                    scored_materials.append({
+                        "id": str(m.id),
+                        "content": m.content,
+                        "material_type": m.material_type,
+                        "tags": m.tags,
+                        "source": m.source,
+                        "match_score": score,
+                        "matched_keywords": matched_keywords
+                    })
             
-            materials = query.limit(limit).all()
+            # 按分数降序排列
+            scored_materials.sort(key=lambda x: x['match_score'], reverse=True)
             
-            return [
-                {
-                    "id": str(m.id),
-                    "content": m.content,
-                    "material_type": m.material_type,
-                    "tags": m.tags,
-                    "source": m.source
-                }
-                for m in materials
-            ]
+            return scored_materials[:limit]
         finally:
             db.close()
     
