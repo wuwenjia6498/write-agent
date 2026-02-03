@@ -25,6 +25,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
+import { TagInput } from '@/components/ui/tag-input'
 
 import { API_BASE } from '@/lib/api-config'
 
@@ -69,7 +70,8 @@ export default function MaterialsPage() {
   const [newMaterial, setNewMaterial] = useState({
     content: '',
     material_type: '实操案例',  // 默认选择实操案例
-    channel_slug: '_global_'   // 使用特殊值表示全局通用
+    channel_slug: '_global_',   // 使用特殊值表示全局通用
+    tags: [] as string[]        // 关键词标签
   })
   const [creating, setCreating] = useState(false)
   
@@ -140,7 +142,7 @@ export default function MaterialsPage() {
           content: newMaterial.content,
           material_type: newMaterial.material_type,
           channel_slug: newMaterial.channel_slug === '_global_' ? null : newMaterial.channel_slug,
-          tags: [],
+          tags: newMaterial.tags,  // 传递用户输入的标签
           source: null,
           import_source: 'manual'
         })
@@ -166,7 +168,8 @@ export default function MaterialsPage() {
     setNewMaterial({ 
       content: '', 
       material_type: '实操案例', 
-      channel_slug: '_global_'
+      channel_slug: '_global_',
+      tags: []
     })
     setUploadFile(null)
     setUploadTab('manual')
@@ -185,7 +188,7 @@ export default function MaterialsPage() {
       formData.append('file', uploadFile)
       formData.append('material_type', newMaterial.material_type)
       formData.append('channel_slug', newMaterial.channel_slug === '_global_' ? '' : newMaterial.channel_slug)
-      formData.append('tags', '')
+      formData.append('tags', newMaterial.tags.join(','))  // 传递用户输入的标签
       formData.append('style_tags', '')
       formData.append('quality_weight', '3')
 
@@ -366,6 +369,20 @@ export default function MaterialsPage() {
                         {MATERIAL_TYPE_CONFIG[newMaterial.material_type]}
                       </p>
                       
+                      {/* 关键词标签 */}
+                      <div>
+                        <Label>关键词标签</Label>
+                        <p className="text-xs text-gray-400 mt-0.5 mb-1.5">
+                          添加标签可提高素材检索精准度（输入后按回车添加，支持逗号分隔批量粘贴）
+                        </p>
+                        <TagInput
+                          value={newMaterial.tags}
+                          onChange={(tags) => setNewMaterial({ ...newMaterial, tags })}
+                          placeholder="如：阅读策略、整本书、思维导图..."
+                          variant="blue"
+                        />
+                      </div>
+                      
                       <div className="flex justify-end gap-2 pt-4">
                         <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
                           取消
@@ -471,6 +488,20 @@ export default function MaterialsPage() {
                         {MATERIAL_TYPE_CONFIG[newMaterial.material_type]}
                       </p>
                       
+                      {/* 关键词标签 */}
+                      <div>
+                        <Label>关键词标签</Label>
+                        <p className="text-xs text-gray-400 mt-0.5 mb-1.5">
+                          添加标签可提高素材检索精准度（输入后按回车添加）
+                        </p>
+                        <TagInput
+                          value={newMaterial.tags}
+                          onChange={(tags) => setNewMaterial({ ...newMaterial, tags })}
+                          placeholder="如：阅读策略、整本书、思维导图..."
+                          variant="blue"
+                        />
+                      </div>
+                      
                       <div className="flex justify-end gap-2 pt-4">
                         <Button variant="outline" onClick={() => setIsCreateDialogOpen(false)}>
                           取消
@@ -531,6 +562,20 @@ export default function MaterialsPage() {
                   <p className="text-sm text-gray-700 mb-3 line-clamp-4">
                     {material.content}
                   </p>
+                  
+                  {/* 显示标签 */}
+                  {material.tags && material.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-3">
+                      {material.tags.slice(0, 3).map((tag, idx) => (
+                        <span key={idx} className="text-xs bg-[#3a5e98]/10 text-[#3a5e98] px-2 py-0.5 rounded-full">
+                          {tag}
+                        </span>
+                      ))}
+                      {material.tags.length > 3 && (
+                        <span className="text-xs text-gray-400">+{material.tags.length - 3}</span>
+                      )}
+                    </div>
+                  )}
                   
                   <div className="flex items-center justify-between text-xs text-gray-400 pt-3 border-t border-gray-100">
                     <div className="flex items-center gap-2">
@@ -598,6 +643,20 @@ export default function MaterialsPage() {
               </DialogHeader>
               
               <div className="mt-4 space-y-4">
+                {/* 关键词标签 */}
+                {selectedMaterial.tags && selectedMaterial.tags.length > 0 && (
+                  <div>
+                    <Label className="text-gray-500 text-xs mb-2 block">关键词标签</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {selectedMaterial.tags.map((tag, idx) => (
+                        <span key={idx} className="text-xs bg-[#3a5e98] text-white px-2.5 py-1 rounded-full">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
                 {/* 完整内容 */}
                 <div className="p-4 bg-gray-50 rounded-lg border border-gray-200">
                   <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
