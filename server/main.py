@@ -60,14 +60,14 @@ async def health_check():
     }
 
 # 导入路由模块
-from routes import channels, workflow, materials, brand_assets, tasks
+from routes import channels, workflow, brand_assets, tasks, admin_knowledge
 
 # 注册路由
 app.include_router(channels.router, prefix="/api/channels", tags=["频道管理"])
 app.include_router(workflow.router, prefix="/api/workflow", tags=["工作流"])
-app.include_router(materials.router, prefix="/api/materials", tags=["素材管理"])
 app.include_router(brand_assets.router, prefix="/api/brand-assets", tags=["品牌资产"])
 app.include_router(tasks.router, prefix="/api/tasks", tags=["任务管理"])
+app.include_router(admin_knowledge.router, prefix="/api/admin/knowledge", tags=["知识库管理"])
 
 if __name__ == "__main__":
     import uvicorn

@@ -129,8 +129,8 @@ WORKFLOW_STEPS = [
     {"step_id": 2, "step_name": "信息搜索", "description": "深度调研，审阅确认", "is_checkpoint": True},
     {"step_id": 3, "step_name": "选题讨论", "description": "避免方向错误，减少返工", "is_checkpoint": True},
     {"step_id": 4, "step_name": "协作文档", "description": "明确AI与用户分工", "is_checkpoint": False},
-    {"step_id": 5, "step_name": "风格建模", "description": "确认风格DNA，锁定创作基调", "is_checkpoint": True},
-    {"step_id": 6, "step_name": "挂起等待", "description": "获取真实数据前不创作", "is_checkpoint": True},
+    {"step_id": 5, "step_name": "风格建模", "description": "自动锁定样文风格", "is_checkpoint": False},
+    {"step_id": 6, "step_name": "创作准备", "description": "自动封装创作上下文", "is_checkpoint": False},
     {"step_id": 7, "step_name": "初稿创作", "description": "融入个人视角，严禁空洞", "is_checkpoint": False},
     {"step_id": 8, "step_name": "四遍审校", "description": "内容→DNA对齐→风格→细节", "is_checkpoint": False},
     {"step_id": 9, "step_name": "文章配图", "description": "提供配图方案与Markdown代码", "is_checkpoint": False}
@@ -145,18 +145,14 @@ class CreateWorkflowRequest(BaseModel):
 
 
 class ConfirmStepRequest(BaseModel):
-    """确认卡点请求"""
+    """确认卡点请求（Step 2/3/4）"""
     # Step 2: 调研确认
     knowledge_confirmed: Optional[bool] = Field(None, description="调研确认 (Step 2)")
     edited_knowledge: Optional[str] = Field(None, description="用户编辑后的调研内容 (Step 2)")
     # Step 3: 选题确认
     selected_topic: Optional[str] = Field(None, description="选定的选题 (Step 3)")
-    # Step 5: 风格确认
-    style_confirmed: Optional[bool] = Field(None, description="风格确认 (Step 5)")
-    user_style_profile: Optional[Dict[str, Any]] = Field(None, description="用户自定义的风格配置 (Step 5)")
-    selected_sample: Optional[Dict[str, Any]] = Field(None, description="v3.5: 选定的标杆样文 (Step 5)")
-    # Step 6: 素材确认
-    user_materials: Optional[str] = Field(None, description="用户提供的素材 (Step 6)")
+    # Step 4: 协作文档确认
+    user_supplement: Optional[str] = Field(None, description="用户补充信息 (Step 4)")
 
 
 class ExecuteStepRequest(BaseModel):
@@ -317,7 +313,8 @@ async def execute_step(
             # 同时保存到 brief_data 便于后续步骤引用（包含来源信息）
             db_service.update_brief_data(task_id, {
                 "step_2_output": result["output"],
-                "knowledge_sources": knowledge_sources  # 真实搜索来源
+                "knowledge_sources": knowledge_sources,  # 真实搜索来源
+                "internal_knowledge": result.get("internal_knowledge", "")  # RAG 知识
             })
             db_service.add_think_aloud_log(task_id, 2, result["think_aloud"])
             
@@ -362,106 +359,89 @@ async def execute_step(
             }
             
         elif step_id == 4:
-            # Step 4: 创建协作文档
+            # Step 4: 创建协作文档（v4.5: 注入知识库上下文，降低用户输入负担）
             if not selected_topic:
                 selected_topic = brief_data.get("selected_topic", "")
             if not selected_topic:
                 raise HTTPException(status_code=400, detail="需要提供选定的选题")
             
-            result = await workflow_engine.execute_step_4(selected_topic)
+            internal_knowledge = brief_data.get("internal_knowledge", "") or ""
+            knowledge_summary = task.get("knowledge_summary", "") or ""
+            
+            result = await workflow_engine.execute_step_4(
+                selected_topic,
+                internal_knowledge=internal_knowledge,
+                knowledge_summary=knowledge_summary,
+            )
             
             db_service.update_brief_data(task_id, {"step_4_output": result["output"]})
             db_service.add_think_aloud_log(task_id, 4, result["think_aloud"])
             
+            # Step 4 现在是卡点：等待用户补充信息
+            db_service.update_task_to_waiting(task_id, 4, {
+                "collaboration_doc": result["output"],
+                "waiting_for": "user_supplement"
+            })
+            
+            return {
+                "success": True,
+                "step_id": step_id,
+                "is_checkpoint": True,
+                "status": "waiting_confirm",
+                "result": result,
+                "message": "请查看协作文档，如有需要可补充信息后继续"
+            }
+            
         elif step_id == 5:
-            # Step 5: 风格建模与素材检索（卡点 - 需用户确认风格）
+            # Step 5: 风格建模（自动流转，不再卡点）
             if not selected_topic:
                 selected_topic = brief_data.get("selected_topic", "")
             
             result = await workflow_engine.execute_step_5(
                 selected_topic, 
                 channel_id,
-                task_id=task_id  # 传入 task_id 用于持久化
+                task_id=task_id
             )
             
-            # 保存风格画像和检索结果（包括样文推荐数据）
             style_profile = result.get("style_profile", {})
             classified_materials = result.get("classified_materials", {"long": [], "short": []})
             db_service.update_brief_data(task_id, {
                 "step_5_output": result["output"],
                 "retrieved_materials": result.get("retrieved_materials", []),
-                "classified_materials": classified_materials,  # 分类素材
+                "classified_materials": classified_materials,
                 "style_profile": style_profile,
-                # v3.5: 保存样文推荐数据
                 "selected_sample": result.get("selected_sample"),
                 "all_samples": result.get("all_samples", [])
             })
             db_service.add_think_aloud_log(task_id, 5, result.get("think_aloud", ""))
             
-            # 设置为等待确认状态（风格确认卡点）
-            db_service.update_task_to_waiting(task_id, 5, {
-                "style_profile": style_profile,
-                "waiting_for": "style_confirmation"
-            })
-            
-            return {
-                "success": True,
-                "step_id": step_id,
-                "is_checkpoint": True,
-                "status": "waiting_confirm",
-                "result": result,
-                "message": "请确认风格画像后继续创作"
-            }
-            
         elif step_id == 6:
-            # Step 6: 挂起等待（卡点）
+            # Step 6: 内部准备（自动流转，不再卡点）
             result = await workflow_engine.execute_step_6()
             
             db_service.update_brief_data(task_id, {"step_6_output": result["output"]})
             db_service.add_think_aloud_log(task_id, 6, result["think_aloud"])
             
-            # 设置为等待确认状态
-            db_service.update_task_to_waiting(task_id, 6, {
-                "checklist": result["output"],
-                "waiting_for": "data_confirmation"
-            })
-            
-            return {
-                "success": True,
-                "step_id": step_id,
-                "is_checkpoint": True,
-                "status": "waiting_confirm",
-                "result": result,
-                "message": "请确认所有素材已准备就绪后继续"
-            }
-            
         elif step_id == 7:
-            # Step 7: 初稿创作（v3.6 - 单一标杆驱动 + 调研事实地基）
+            # Step 7: 初稿创作（v4.5 - 样文原文驱动 + 调研事实地基 + 知识库统一 RAG）
             if not selected_topic:
                 selected_topic = brief_data.get("selected_topic", "")
-            if not materials:
-                materials = brief_data.get("user_materials", "")
             
             step5_output = brief_data.get("step_5_output", "")
             
-            # 优先使用用户自定义的风格配置，否则使用原始风格画像
-            style_profile = brief_data.get("user_style_profile") or brief_data.get("style_profile", {})
-            
-            # v3.5: 获取所选的单一标杆样文
-            selected_sample = brief_data.get("selected_sample")
-            
-            # v3.6: 获取 Step 2 调研摘要（事实地基）
             knowledge_summary = task.get("knowledge_summary", "") or ""
+            internal_knowledge = brief_data.get("internal_knowledge", "") or ""
+            user_feedback = brief_data.get("user_supplement", "") or ""
             
-            # 从 Step 1 的分析结果中提取字数要求
             step1_output = brief_data.get("step_1_output", "")
             original_brief = brief_data.get("brief", "")
             word_count = extract_word_count(step1_output, original_brief)
             
             result = await workflow_engine.execute_step_7(
-                selected_topic, step5_output, materials, channel_id, word_count, 
-                style_profile, selected_sample,
-                knowledge_summary=knowledge_summary  # v3.6: 传入调研摘要
+                selected_topic, step5_output, channel_id, word_count,
+                knowledge_summary=knowledge_summary,
+                internal_knowledge=internal_knowledge,
+                user_feedback=user_feedback
             )
             
             # 保存初稿
@@ -469,7 +449,10 @@ async def execute_step(
                 task_id, 7, "processing",
                 draft_content=result["output"]
             )
-            db_service.update_brief_data(task_id, {"step_7_output": result["output"]})
+            db_service.update_brief_data(task_id, {
+                "step_7_output": result["output"],
+                "selected_samples": result.get("selected_samples", [])
+            })
             db_service.add_think_aloud_log(task_id, 7, result["think_aloud"])
             
         elif step_id == 8:
@@ -539,7 +522,7 @@ async def confirm_checkpoint(task_id: str, request: ConfirmStepRequest):
     """
     确认卡点并继续执行
     
-    用于 Step 3 选题确认和 Step 6 数据确认
+    用于 Step 2/3/4 卡点确认
     """
     task = db_service.get_task(task_id)
     if not task:
@@ -572,48 +555,26 @@ async def confirm_checkpoint(task_id: str, request: ConfirmStepRequest):
                 task_id, 2,
                 "[用户确认] 已确认调研结论，进入选题阶段"
             )
+    elif current_step == 4:
+        # Step 4: 协作文档确认 + 用户补充
+        if request.user_supplement:
+            updates["user_supplement"] = request.user_supplement
+            db_service.add_think_aloud_log(
+                task_id, 4,
+                f"[用户补充] 用户提供了额外信息:\n{request.user_supplement[:300]}..."
+            )
+        else:
+            db_service.add_think_aloud_log(
+                task_id, 4,
+                "[用户确认] 无额外补充，直接继续"
+            )
     elif current_step == 3 and request.selected_topic:
         updates["selected_topic"] = request.selected_topic
         db_service.add_think_aloud_log(
             task_id, 3, 
             f"[用户确认] 选定选题:\n{request.selected_topic[:200]}..."
         )
-    elif current_step == 5 and request.style_confirmed:
-        # Step 5: 风格确认（可编辑任务简报）
-        updates["style_confirmed"] = True
-        
-        # v3.5: 保存选定的标杆样文
-        if request.selected_sample:
-            updates["selected_sample"] = request.selected_sample
-            sample_title = request.selected_sample.get("title", "未命名")
-            db_service.add_think_aloud_log(
-                task_id, 5, 
-                f"[用户确认] 选定标杆样文: 「{sample_title}」\n"
-                f"后续创作将严格复刻此样文的写作风格与结构逻辑"
-            )
-        
-        # 如果用户自定义了风格配置，保存为最高指令
-        if request.user_style_profile:
-            updates["user_style_profile"] = request.user_style_profile
-            custom_guidelines = request.user_style_profile.get("writing_guidelines", [])
-            custom_req = request.user_style_profile.get("custom_requirement", "")
-            
-            log_content = f"[用户确认] 已自定义风格配置（覆盖样文默认特征）\n"
-            log_content += f"- 创作指南: {len(custom_guidelines)} 条\n"
-            if custom_req:
-                log_content += f"- 特殊要求: {custom_req[:100]}..."
-            db_service.add_think_aloud_log(task_id, 5, log_content)
-        elif not request.selected_sample:
-            db_service.add_think_aloud_log(
-                task_id, 5,
-                "[用户确认] 无标杆样文，将使用频道基础人设进行创作"
-            )
-    elif current_step == 6 and request.user_materials:
-        updates["user_materials"] = request.user_materials
-        db_service.add_think_aloud_log(
-            task_id, 6,
-            f"[用户确认] 提供素材:\n{request.user_materials[:200]}..."
-        )
+    
     
     if updates:
         db_service.update_brief_data(task_id, updates)

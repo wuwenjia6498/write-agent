@@ -25,10 +25,6 @@
   "paragraph": {
     "max_length": 200,
     "description": "单段不超过 200 字"
-  },
-  "style_dna": {
-    "pass_threshold": 0.8,
-    "description": "风格 DNA 对齐检查合格线 ≥ 80%"
   }
 }
 

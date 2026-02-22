@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { CheckCircle2, FileText, Layers } from 'lucide-react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import AppHeader from '@/components/AppHeader'
@@ -10,7 +11,6 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import DiffViewer from '@/components/DiffViewer'
 
 import { API_BASE } from '@/lib/api-config'
@@ -20,8 +20,8 @@ const WORKFLOW_STEPS = [
   { id: 2, name: '信息搜索', key: 'step_2_output', checkpoint: true },
   { id: 3, name: '选题讨论', key: 'step_3_output', checkpoint: true },
   { id: 4, name: '协作文档', key: 'step_4_output' },
-  { id: 5, name: '风格建模', key: 'step_5_output', checkpoint: true },
-  { id: 6, name: '挂起等待', key: 'step_6_output', checkpoint: true },
+  { id: 5, name: '风格建模', key: 'step_5_output', auto: true },
+  { id: 6, name: '创作准备', key: 'step_6_output', auto: true },
   { id: 7, name: '初稿创作', key: 'draft_content' },
   { id: 8, name: '四遍审校', key: 'final_content' },
   { id: 9, name: '文章配图', key: 'step_9_output' },
@@ -52,10 +52,8 @@ export default function TaskDetailPage() {
   const [task, setTask] = useState<TaskDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [activeStep, setActiveStep] = useState(1)
-  const [viewingSample, setViewingSample] = useState<any>(null)  // 查看样文详情
-  const [expandedTopics, setExpandedTopics] = useState<Record<number, boolean>>({})  // 选题展开状态
-  const [copiedTopicIndex, setCopiedTopicIndex] = useState<number | null>(null)  // 复制状态
-  const [expandedMaterialId, setExpandedMaterialId] = useState<string | null>(null)  // 展开查看的素材ID
+  const [expandedTopics, setExpandedTopics] = useState<Record<number, boolean>>({})
+  const [copiedTopicIndex, setCopiedTopicIndex] = useState<number | null>(null)
 
   useEffect(() => {
     if (taskId) fetchTask()
@@ -105,40 +103,14 @@ export default function TaskDetailPage() {
       if (output?.document) return output.document
     }
     
-    // Step 5: 风格建模 - 去 JSON 化
+    // Step 5: 风格建模 — 详情区已使用专属 Callout 卡片，此处仅做简单文本回退
     if (stepId === 5) {
-      let formatted = ''
-      // 风格指南文字描述
-      if (output?.style_guide) {
-        formatted += output.style_guide
-      }
-      // 推荐样文信息
-      if (output?.selected_sample) {
-        formatted += `\n\n📌 推荐标杆样文: ${output.selected_sample.title}`
-        if (output.selected_sample.custom_tags?.length > 0) {
-          formatted += `\n   标签: ${output.selected_sample.custom_tags.join(', ')}`
-        }
-      }
-      // 风格画像描述
-      if (output?.style_profile) {
-        const sp = output.style_profile
-        if (sp.opening_style?.description) formatted += `\n\n开头风格: ${sp.opening_style.description}`
-        if (sp.tone?.description) formatted += `\n语气特征: ${sp.tone.description}`
-        if (sp.ending_style?.description) formatted += `\n结尾风格: ${sp.ending_style.description}`
-      }
-      return formatted || '风格建模完成'
+      return '风格基调已锁定'
     }
     
-    // Step 6: 挂起等待 - 解析 checklist 格式
+    // Step 6: 创作准备（自动流转，详情区使用专属卡片渲染）
     if (stepId === 6) {
-      let formatted = ''
-      if (output?.checklist) {
-        formatted += output.checklist
-      }
-      if (output?.waiting_for) {
-        formatted += `\n\n等待确认: ${output.waiting_for}`
-      }
-      return formatted || JSON.stringify(output, null, 2)
+      return '创作上下文已自动封装'
     }
     
     // Step 9: 文章配图
@@ -198,208 +170,17 @@ export default function TaskDetailPage() {
       return formatted || null
     }
     
-    // Step 5: 风格建模 - 完整展示所有内容
+    // Step 5: 风格建模 — 详情区使用专属 Callout 卡片渲染，此处仅返回标记值供侧边栏判定"有产出"
     if (step.id === 5) {
-      const briefData = task.brief_data
-      if (!briefData) return null
-      
-      let formatted = ''
-      
-      // 1. 推荐样文（最重要）
-      const recommendedSample = briefData.selected_sample
-      const selectedSample = briefData.selected_sample || recommendedSample
-      if (selectedSample) {
-        formatted += '⭐ 标杆样文\n'
-        formatted += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
-        formatted += `📌 标题：《${selectedSample.title}》\n`
-        if (selectedSample.custom_tags?.length > 0) {
-          formatted += `🏷️ 标签：${selectedSample.custom_tags.join('、')}\n`
-        }
-        if (selectedSample.word_count) {
-          formatted += `📝 字数：${selectedSample.word_count} 字\n`
-        }
-        if (selectedSample.match_score) {
-          formatted += `🎯 匹配度：${selectedSample.match_score} 分\n`
-        }
-        
-        // 样文的六维特征（英文类型转中文）
-        const typeToZh: Record<string, string> = {
-          'direct': '开门见山',
-          'story_intro': '故事引入',
-          'question': '设问引入',
-          'scene': '场景描写',
-          'warm_friend': '温润亲切',
-          'professional': '专业权威',
-          'literary': '文学气质',
-          'conversational': '对话感强',
-          'emotional': '情感升华',
-          'reflection': '引导思考',
-          'practical': '实用总结',
-          'open_ended': '开放式结尾'
-        }
-        const getZhType = (val: any) => {
-          if (!val) return '—'
-          if (typeof val === 'string') return typeToZh[val] || val
-          if (val.description) return val.description
-          if (val.type) return typeToZh[val.type] || val.type
-          return '—'
-        }
-        
-        const sampleProfile = selectedSample.style_profile || selectedSample.features
-        if (sampleProfile) {
-          formatted += '\n【样文六维特征】\n'
-          if (sampleProfile.opening_style) {
-            formatted += `  • 开头：${getZhType(sampleProfile.opening_style)}\n`
-          }
-          if (sampleProfile.tone) {
-            formatted += `  • 语气：${getZhType(sampleProfile.tone)}\n`
-          }
-          if (sampleProfile.sentence_pattern) {
-            const sp = sampleProfile.sentence_pattern
-            formatted += `  • 句式：${sp.description || '—'}\n`
-          }
-          if (sampleProfile.paragraph_rhythm) {
-            const pr = sampleProfile.paragraph_rhythm
-            formatted += `  • 节奏：${pr.description || pr.variation || '—'}\n`
-          }
-          if (sampleProfile.ending_style) {
-            formatted += `  • 结尾：${getZhType(sampleProfile.ending_style)}\n`
-          }
-          if (sampleProfile.expressions) {
-            const ex = sampleProfile.expressions
-            formatted += `  • 表达：${ex.description || (ex.examples?.slice(0, 3).join('、')) || '—'}\n`
-          }
-        }
-        formatted += '\n'
+      if (task.brief_data?.selected_samples?.length > 0 || task.brief_data?.step_5_output) {
+        return '风格基调已锁定'
       }
-      
-      // 2. 所有可选样文列表
-      const allSamples = briefData.all_samples || []
-      if (allSamples.length > 1) {
-        formatted += '📚 全部样文（' + allSamples.length + ' 篇）\n'
-        formatted += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
-        allSamples.forEach((sample: any, idx: number) => {
-          const isSelected = selectedSample?.id === sample.id
-          formatted += `${idx + 1}. ${isSelected ? '✓ ' : ''}《${sample.title}》`
-          if (sample.custom_tags?.length > 0) {
-            formatted += ` [${sample.custom_tags.slice(0, 3).join('、')}]`
-          }
-          if (sample.match_score) {
-            formatted += ` (${sample.match_score}分)`
-          }
-          formatted += '\n'
-        })
-        formatted += '\n'
-      }
-      
-      // 3. 风格画像（从多个来源获取，只有有内容时才显示）
-      const styleProfile = briefData.style_profile || selectedSample?.style_profile || selectedSample?.features
-      
-      // 检查是否有实际内容
-      const portrait = styleProfile?.style_portrait
-      const logic = styleProfile?.structural_logic
-      const toneFeats = styleProfile?.tone_features
-      
-      if (portrait || (logic && logic.length > 0) || (toneFeats && toneFeats.length > 0)) {
-        formatted += '🎨 风格画像\n'
-        formatted += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
-        
-        if (portrait) {
-          formatted += `「${portrait}」\n\n`
-        }
-        
-        if (logic && logic.length > 0) {
-          formatted += `📋 结构逻辑：${logic.slice(0, 5).join(' → ')}\n`
-        }
-        
-        if (toneFeats && toneFeats.length > 0) {
-          formatted += `🎭 语气特征：${toneFeats.join('、')}\n`
-        }
-        formatted += '\n'
-      }
-      
-      // 4. 创作指南
-      const guidelines = styleProfile?.writing_guidelines || briefData.user_style_profile?.writing_guidelines
-      if (guidelines?.length > 0) {
-        formatted += '✏️ 创作指南\n'
-        formatted += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
-        guidelines.forEach((g: string, i: number) => {
-          formatted += `${i + 1}. ${g}\n`
-        })
-        formatted += '\n'
-      }
-      
-      // 5. 检索素材
-      const classifiedMaterials = briefData.classified_materials
-      if (classifiedMaterials) {
-        const longMats = classifiedMaterials.long || []
-        const shortMats = classifiedMaterials.short || []
-        if (longMats.length + shortMats.length > 0) {
-          formatted += '📦 检索素材（' + (longMats.length + shortMats.length) + ' 条）\n'
-          formatted += '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n'
-          
-          if (longMats.length > 0) {
-            formatted += '【长文素材】\n'
-            longMats.forEach((mat: any, idx: number) => {
-              formatted += `${idx + 1}. [${mat.material_type}] ${mat.content?.slice(0, 150)}${mat.content?.length > 150 ? '...' : ''}\n`
-              if (mat.source) formatted += `   来源：${mat.source}\n`
-              formatted += '\n'
-            })
-          }
-          
-          if (shortMats.length > 0) {
-            formatted += '【灵感碎片】\n'
-            shortMats.forEach((mat: any, idx: number) => {
-              formatted += `${idx + 1}. [${mat.material_type}] ${mat.content}\n`
-            })
-          }
-        }
-      }
-      
-      // 6. step_5_output 原始内容作为补充
-      const step5Output = briefData.step_5_output
-      if (step5Output && !formatted) {
-        if (typeof step5Output === 'string') {
-          formatted = step5Output
-        } else if (step5Output.output) {
-          formatted = step5Output.output
-        }
-      }
-      
-      return formatted || '风格建模数据加载中...'
+      return task.current_step > 5 ? '风格基调已锁定' : null
     }
     
-    // Step 6: 挂起等待 - 显示检查清单
+    // Step 6: 创作准备 — 详情区使用专属卡片渲染，此处仅返回标记值供侧边栏判定"有产出"
     if (step.id === 6) {
-      const briefData = task.brief_data
-      let formatted = ''
-      
-      // checklist 内容
-      if (briefData?.step_6_output) {
-        const output = briefData.step_6_output
-        if (typeof output === 'string') {
-          formatted = output
-        } else if (output?.checklist) {
-          formatted = output.checklist
-        } else if (output?.output) {
-          formatted = output.output
-        }
-      }
-      
-      // 等待确认信息
-      if (briefData?.waiting_for) {
-        formatted += '\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
-        formatted += `⏳ 等待确认：${briefData.waiting_for === 'data_confirmation' ? '素材准备就绪' : briefData.waiting_for}\n`
-      }
-      
-      // 用户素材
-      if (briefData?.user_materials) {
-        formatted += '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'
-        formatted += '📝 用户补充素材：\n\n'
-        formatted += briefData.user_materials
-      }
-      
-      return formatted || '等待确认中...'
+      return task.current_step > 6 ? '创作上下文已自动封装' : null
     }
     
     // 其他步骤从 brief_data 获取
@@ -508,6 +289,7 @@ export default function TaskDetailPage() {
                           <p className="text-sm truncate">{step.name}</p>
                           <div className="flex items-center gap-2 mt-0.5">
                             {step.checkpoint && <span className="text-xs text-gray-500">卡点</span>}
+                            {'auto' in step && step.auto && <span className="text-xs text-gray-400">自动</span>}
                             {hasOutput && <span className="text-xs text-gray-400">有产出</span>}
                           </div>
                         </div>
@@ -747,234 +529,80 @@ export default function TaskDetailPage() {
                 </CardContent>
               </Card>
             ) : activeStep === 5 ? (
-              /* Step 5 特殊渲染：支持点击查看样文 */
+              /* Step 5: 风格建模 — 与工作台同步的 Callout 卡片 */
               <Card className="border-gray-200">
                 <CardHeader>
                   <CardTitle className="text-base">
                     Step 5: {WORKFLOW_STEPS[4]?.name}
                   </CardTitle>
+                  <CardDescription>自动流转</CardDescription>
                 </CardHeader>
                 <Separator />
-                <CardContent className="pt-4">
-                  <ScrollArea className="h-[650px]">
-                    {(() => {
-                      const briefData = task.brief_data
-                      if (!briefData) return <div className="text-center py-16 text-gray-500">暂无产出内容</div>
-                      
-                      const recommendedSample = briefData.selected_sample
-                      const selectedSample = briefData.selected_sample || recommendedSample
-                      const allSamples = briefData.all_samples || []
-                      const styleProfile = briefData.style_profile || selectedSample?.style_profile || selectedSample?.features
-                      const classifiedMaterials = briefData.classified_materials
-                      const guidelines = styleProfile?.writing_guidelines || briefData.user_style_profile?.writing_guidelines
-                      
-                      // 英文类型转中文
-                      const typeToZh: Record<string, string> = {
-                        'direct': '开门见山', 'story_intro': '故事引入', 'question': '设问引入', 'scene': '场景描写',
-                        'warm_friend': '温润亲切', 'professional': '专业权威', 'literary': '文学气质', 'conversational': '对话感强',
-                        'emotional': '情感升华', 'reflection': '引导思考', 'practical': '实用总结', 'open_ended': '开放式结尾'
-                      }
-                      const getZhType = (val: any) => {
-                        if (!val) return '—'
-                        if (typeof val === 'string') return typeToZh[val] || val
-                        if (val.description) return val.description
-                        if (val.type) return typeToZh[val.type] || val.type
-                        return '—'
-                      }
-                      
+                <CardContent className="pt-6">
+                  {(() => {
+                    const samples: Array<{id: string, title: string}> = task.brief_data?.selected_samples || []
+                    
+                    if (samples.length > 0) {
                       return (
-                        <div className="space-y-6 p-4">
-                          {/* 标杆样文 */}
-                          {selectedSample && (
-                            <div>
-                              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                                <span>⭐</span> 标杆样文
-                              </h3>
-                              <div className="bg-gradient-to-r from-[#3a5e98]/5 to-[#2a4a7a]/5 border border-[#3a5e98]/20 rounded-lg p-4">
-                                <div className="flex items-start justify-between">
-                                  <div>
-                                    <button
-                                      onClick={() => setViewingSample(selectedSample)}
-                                      className="text-[#3a5e98] font-medium hover:underline text-left"
-                                    >
-                                      📌 《{selectedSample.title}》
-                                    </button>
-                                    <div className="mt-2 space-y-1 text-sm text-gray-600">
-                                      {selectedSample.custom_tags?.length > 0 && (
-                                        <p>🏷️ 标签：{selectedSample.custom_tags.join('、')}</p>
-                                      )}
-                                      {selectedSample.word_count && <p>📝 字数：{selectedSample.word_count} 字</p>}
-                                      {selectedSample.match_score && <p>🎯 匹配度：{selectedSample.match_score} 分</p>}
-                                    </div>
-                                  </div>
-                                  <Button
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={() => setViewingSample(selectedSample)}
-                                    className="text-xs"
+                        <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                          <div className="flex items-start gap-3">
+                            <CheckCircle2 className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-slate-800">风格基调已自动锁定</p>
+                              <p className="text-sm text-slate-500 mt-1">
+                                创作时 AI 已从样文库中抽取了以下标杆文章进行排版与语气复刻：
+                              </p>
+                              <div className="mt-3 flex flex-col gap-2">
+                                {samples.map((s) => (
+                                  <div
+                                    key={s.id}
+                                    className="flex items-center bg-white border border-slate-200 rounded-md px-3 py-2 shadow-sm"
                                   >
-                                    查看原文
-                                  </Button>
-                                </div>
-                                
-                                {/* 六维特征 */}
-                                {(selectedSample.style_profile || selectedSample.features) && (
-                                  <div className="mt-4 pt-3 border-t border-[#3a5e98]/10">
-                                    <p className="text-xs text-gray-500 mb-2">【六维特征】</p>
-                                    <div className="grid grid-cols-2 gap-2 text-xs text-gray-600">
-                                      {(() => {
-                                        const sp = selectedSample.style_profile || selectedSample.features
-                                        return (
-                                          <>
-                                            {sp.opening_style && <p>• 开头：{getZhType(sp.opening_style)}</p>}
-                                            {sp.tone && <p>• 语气：{getZhType(sp.tone)}</p>}
-                                            {sp.sentence_pattern && <p>• 句式：{sp.sentence_pattern.description || '—'}</p>}
-                                            {sp.paragraph_rhythm && <p>• 节奏：{sp.paragraph_rhythm.description || sp.paragraph_rhythm.variation || '—'}</p>}
-                                            {sp.ending_style && <p>• 结尾：{getZhType(sp.ending_style)}</p>}
-                                            {sp.expressions && <p>• 表达：{sp.expressions.description || (sp.expressions.examples?.slice(0, 3).join('、')) || '—'}</p>}
-                                          </>
-                                        )
-                                      })()}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                          
-                          {/* 全部样文列表 */}
-                          {allSamples.length > 1 && (
-                            <div>
-                              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                                <span>📚</span> 全部样文（{allSamples.length} 篇）
-                              </h3>
-                              <div className="space-y-2">
-                                {allSamples.map((sample: any, idx: number) => (
-                                  <div key={sample.id || idx} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
-                                    <div className="flex items-center gap-2">
-                                      {selectedSample?.id === sample.id && <span className="text-green-600">✓</span>}
-                                      <button
-                                        onClick={() => setViewingSample(sample)}
-                                        className="text-sm text-gray-700 hover:text-[#3a5e98] hover:underline"
-                                      >
-                                        《{sample.title}》
-                                      </button>
-                                      {sample.custom_tags?.length > 0 && (
-                                        <span className="text-xs text-gray-400">[{sample.custom_tags.slice(0, 2).join('、')}]</span>
-                                      )}
-                                    </div>
-                                    {sample.match_score && <span className="text-xs text-gray-400">{sample.match_score}分</span>}
+                                    <FileText className="w-4 h-4 text-slate-400 mr-2 flex-shrink-0" />
+                                    <span className="text-sm text-slate-700">《{s.title}》</span>
                                   </div>
                                 ))}
                               </div>
                             </div>
-                          )}
-                          
-                          {/* 风格画像 */}
-                          {styleProfile && (styleProfile.style_portrait || styleProfile.structural_logic?.length > 0 || styleProfile.tone_features?.length > 0) && (
-                            <div>
-                              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                                <span>🎨</span> 风格画像
-                              </h3>
-                              <div className="bg-gray-50 rounded-lg p-4 space-y-2 text-sm text-gray-600">
-                                {styleProfile.style_portrait && <p>「{styleProfile.style_portrait}」</p>}
-                                {styleProfile.structural_logic?.length > 0 && (
-                                  <p>📋 结构逻辑：{styleProfile.structural_logic.slice(0, 5).join(' → ')}</p>
-                                )}
-                                {styleProfile.tone_features?.length > 0 && (
-                                  <p>🎭 语气特征：{styleProfile.tone_features.join('、')}</p>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                          
-                          {/* 创作指南 */}
-                          {guidelines?.length > 0 && (
-                            <div>
-                              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                                <span>✏️</span> 创作指南
-                              </h3>
-                              <div className="bg-gray-50 rounded-lg p-4">
-                                <ol className="list-decimal list-inside space-y-1 text-sm text-gray-600">
-                                  {guidelines.map((g: string, i: number) => <li key={i}>{g}</li>)}
-                                </ol>
-                              </div>
-                            </div>
-                          )}
-                          
-                          {/* 检索素材 */}
-                          {classifiedMaterials && (classifiedMaterials.long?.length > 0 || classifiedMaterials.short?.length > 0) && (
-                            <div>
-                              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                                <span>📦</span> 检索素材（{(classifiedMaterials.long?.length || 0) + (classifiedMaterials.short?.length || 0)} 条）
-                              </h3>
-                              <div className="space-y-3">
-                                {classifiedMaterials.long?.length > 0 && (
-                                  <div>
-                                    <p className="text-xs text-gray-500 mb-2">【长文素材】</p>
-                                    {classifiedMaterials.long.map((mat: any, idx: number) => {
-                                      const matId = mat.id || `long-${idx}`
-                                      const isExpanded = expandedMaterialId === matId
-                                      const wordCount = mat.content_length || mat.content?.length || 0
-                                      
-                                      return (
-                                        <div key={matId} className="bg-gray-50 rounded-lg p-3 mb-2">
-                                          {/* 头部：类型 + 展开按钮 */}
-                                          <div className="flex items-center justify-between">
-                                            <p className="text-xs text-gray-400">[{mat.material_type}]</p>
-                                            <button
-                                              onClick={() => setExpandedMaterialId(isExpanded ? null : matId)}
-                                              className="text-xs text-[#3a5e98] hover:underline"
-                                            >
-                                              {isExpanded ? '收起' : '展开查看'}
-                                            </button>
-                                          </div>
-                                          
-                                          {/* 文件名/来源 + 字数 */}
-                                          <div className="flex items-center gap-2 mt-1">
-                                            <span className="text-gray-500">📄</span>
-                                            <span className="text-sm font-medium text-gray-700">
-                                              {mat.source || mat.title || `${mat.material_type} ${idx + 1}`}
-                                            </span>
-                                            <span className="text-xs text-gray-400">
-                                              ({wordCount} 字)
-                                            </span>
-                                          </div>
-                                          
-                                          {/* 展开后显示完整内容 */}
-                                          {isExpanded && (
-                                            <div className="mt-3 p-3 bg-white border border-gray-200 rounded-lg max-h-60 overflow-y-auto">
-                                              <p className="text-sm text-gray-700 whitespace-pre-wrap">{mat.content}</p>
-                                            </div>
-                                          )}
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                )}
-                                {classifiedMaterials.short?.length > 0 && (
-                                  <div>
-                                    <p className="text-xs text-gray-500 mb-2">【灵感碎片】</p>
-                                    {classifiedMaterials.short.map((mat: any, idx: number) => (
-                                      <div key={mat.id || idx} className="bg-gray-50 rounded-lg p-2 mb-1">
-                                        <span className="text-xs text-gray-400">[{mat.material_type}] </span>
-                                        <span className="text-sm text-gray-700">{mat.content}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                          
-                          {/* 无内容提示 */}
-                          {!selectedSample && !styleProfile && !classifiedMaterials && (
-                            <div className="text-center py-16 text-gray-500">暂无产出内容</div>
-                          )}
+                          </div>
                         </div>
                       )
-                    })()}
-                  </ScrollArea>
+                    }
+                    
+                    return (
+                      <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                        <div className="flex items-center gap-3">
+                          <CheckCircle2 className="w-5 h-5 text-slate-400 flex-shrink-0" />
+                          <div>
+                            <p className="text-sm font-medium text-slate-800">风格基调已自动锁定</p>
+                            <p className="text-sm text-slate-500 mt-0.5">旧版数据无法显示具体样文</p>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })()}
+                </CardContent>
+              </Card>
+            ) : activeStep === 6 ? (
+              /* Step 6: 创作准备 — 极简状态卡片 */
+              <Card className="border-gray-200">
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    Step 6: {WORKFLOW_STEPS[5]?.name}
+                  </CardTitle>
+                  <CardDescription>自动流转</CardDescription>
+                </CardHeader>
+                <Separator />
+                <CardContent className="pt-6">
+                  <div className="bg-slate-50 border border-slate-100 rounded-lg p-5">
+                    <div className="flex items-start gap-3">
+                      <Layers className="w-5 h-5 text-slate-700 flex-shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-slate-800">创作上下文已自动封装</p>
+                        <p className="text-sm text-slate-500 mt-1 mb-3">系统已整合 RAG 检索事实与标杆样文特征，无缝切入初稿创作阶段。</p>
+                      </div>
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             ) : (
@@ -1016,39 +644,6 @@ export default function TaskDetailPage() {
         </div>
       </div>
       
-      {/* 样文详情弹窗 */}
-      <Dialog open={!!viewingSample} onOpenChange={() => setViewingSample(null)}>
-        <DialogContent className="max-w-3xl max-h-[80vh]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <span>📄</span>
-              {viewingSample?.title}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            {/* 样文元信息 */}
-            <div className="flex flex-wrap gap-2 text-sm">
-              {viewingSample?.custom_tags?.map((tag: string, i: number) => (
-                <Badge key={i} variant="secondary" className="bg-blue-100 text-blue-700">
-                  {tag}
-                </Badge>
-              ))}
-              {viewingSample?.word_count && (
-                <Badge variant="outline">{viewingSample.word_count} 字</Badge>
-              )}
-            </div>
-            
-            {/* 样文内容 */}
-            <ScrollArea className="h-[50vh]">
-              <div className="bg-gray-50 rounded-lg p-4">
-                <pre className="whitespace-pre-wrap font-sans text-sm text-gray-700 leading-relaxed">
-                  {viewingSample?.content || '样文内容未保存'}
-                </pre>
-              </div>
-            </ScrollArea>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }

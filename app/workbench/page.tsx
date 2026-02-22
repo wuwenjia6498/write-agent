@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { CheckCircle2, FileText, Clock, Layers } from 'lucide-react'
 import Link from 'next/link'
 import Image from 'next/image'
 import WorkflowProgress from '@/components/WorkflowProgress'
@@ -16,11 +17,11 @@ const WORKFLOW_STEPS = [
   { step: 1, name: '理解需求', desc: '明确需求，保存文档' },
   { step: 2, name: '信息搜索', desc: '深度调研，审阅确认', checkpoint: true },
   { step: 3, name: '选题讨论', desc: '避免方向错误，减少返工', checkpoint: true },
-  { step: 4, name: '协作文档', desc: '明确AI与用户分工' },
-  { step: 5, name: '风格建模', desc: '确认风格 DNA，锁定创作基调', checkpoint: true },
-  { step: 6, name: '挂起等待', desc: '获取真实数据前不创作', checkpoint: true },
+  { step: 4, name: '协作文档', desc: '明确AI与用户分工', checkpoint: true },
+  { step: 5, name: '风格建模', desc: '自动锁定样文风格' },
+  { step: 6, name: '创作准备', desc: '自动封装创作上下文' },
   { step: 7, name: '初稿创作', desc: '融入个人视角，严禁空洞' },
-  { step: 8, name: '四遍审校', desc: '内容 → DNA对齐 → 风格 → 细节' },
+  { step: 8, name: '四遍审校', desc: '逻辑把控 → 知识准确性核对 → 语气润色 → 排版与细节审校' },
   { step: 9, name: '文章配图', desc: '提供配图方案与Markdown代码' },
 ]
 
@@ -52,6 +53,7 @@ export default function WorkbenchPage() {
   // 用户输入
   const [selectedTopic, setSelectedTopic] = useState<string>('')
   const [userMaterials, setUserMaterials] = useState<string>('')
+  const [userSupplement, setUserSupplement] = useState<string>('')
   
   // 加载状态
   const [isExecuting, setIsExecuting] = useState(false)
@@ -100,6 +102,9 @@ export default function WorkbenchPage() {
   const [allSamples, setAllSamples] = useState<any[]>([])
   const [selectedSampleId, setSelectedSampleId] = useState<string | null>(null)
   const [showSampleSelector, setShowSampleSelector] = useState(false)
+  
+  // Step 7 实际抽取的标杆样文（用于 Step 5 历史展示卡片）
+  const [selectedSamples, setSelectedSamples] = useState<Array<{id: string, title: string}>>([])
   
   // 恢复任务相关状态
   const [pendingTasks, setPendingTasks] = useState<PendingTask[]>([])
@@ -442,6 +447,10 @@ export default function WorkbenchPage() {
       if (taskDetail.brief_data?.selected_sample) {
         setSelectedSampleId(taskDetail.brief_data.selected_sample.id)
       }
+      // 恢复 Step 7 实际抽取的标杆样文（用于 Step 5 历史展示卡片）
+      if (taskDetail.brief_data?.selected_samples) {
+        setSelectedSamples(taskDetail.brief_data.selected_samples)
+      }
       
       // 如果任务在等待确认状态，不需要自动执行
       if (taskDetail.status !== 'waiting_confirm') {
@@ -509,16 +518,9 @@ export default function WorkbenchPage() {
       return formatted || '风格建模完成'
     }
     
-    // Step 6: 挂起等待
+    // Step 6: 创作准备（自动流转，详情区使用专属卡片渲染）
     if (stepId === 6) {
-      let formatted = ''
-      if (output?.checklist) {
-        formatted += output.checklist
-      }
-      if (output?.waiting_for) {
-        formatted += `\n\n等待确认: ${output.waiting_for}`
-      }
-      return formatted || JSON.stringify(output, null, 2)
+      return '创作上下文已自动封装'
     }
     
     // Step 9: 文章配图
@@ -663,6 +665,10 @@ export default function WorkbenchPage() {
         if (result.result?.all_samples) {
           setAllSamples(result.result.all_samples)
         }
+      }
+      // Step 7: 保存实际抽取的标杆样文（用于 Step 5 历史展示卡片）
+      if (stepId === 7 && result.result?.selected_samples) {
+        setSelectedSamples(result.result.selected_samples)
       }
       // Step 7/8 可能返回 draft_content/final_content
       if (result.draft_content) {
@@ -809,73 +815,23 @@ export default function WorkbenchPage() {
         executeStep(taskId, 4, { selected_topic: selectedTopic })
         return
       }
-      // Step 5: 风格确认（可编辑任务简报）
-      else if (currentStep === 5) {
-        // 构建自定义风格配置
-        const customStyleProfile = isStyleModified ? {
-          ...styleProfile,
-          writing_guidelines: editedGuidelines.filter(g => g.trim() !== ''),
-          custom_requirement: customRequirement.trim() || null,
-          is_customized: true
-        } : null
-        
-        // v3.5: 获取选定的样文数据
-        const selectedSample = selectedSampleId 
-          ? allSamples.find(s => s.id === selectedSampleId) || recommendedSample
-          : null
-        
-        // 调用确认接口，传递自定义配置和选定样文
+      // Step 4: 协作文档确认 + 用户补充
+      else if (currentStep === 4) {
         const confirmRes = await fetch(`${API_BASE}/workflow/${taskId}/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            style_confirmed: true,
-            user_style_profile: customStyleProfile,
-            selected_sample: selectedSample  // v3.5: 传递选定的标杆样文
-          })
+          body: JSON.stringify({ user_supplement: userSupplement.trim() || null })
         })
         
         if (!confirmRes.ok) {
           throw new Error('确认失败')
         }
         
-        // 更新本地 styleProfile 以反映自定义内容
-        if (customStyleProfile) {
-          setStyleProfile(customStyleProfile)
-        }
-        
-        // 继续执行 Step 6
         setStatus('processing')
-        executeStep(taskId, 6, { selected_topic: selectedTopic })
+        executeStep(taskId, 5, { selected_topic: selectedTopic })
         return
       }
-      // Step 6: 素材确认
-      else if (currentStep === 6) {
-        if (!userMaterials.trim()) {
-          alert('请在下方输入框中输入你准备的真实素材')
-          setIsExecuting(false)
-          return
-        }
-        
-        // 调用确认接口
-        const confirmRes = await fetch(`${API_BASE}/workflow/${taskId}/confirm`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ user_materials: userMaterials })
-        })
-        
-        if (!confirmRes.ok) {
-          throw new Error('确认失败')
-        }
-        
-        // 继续执行 Step 7
-        setStatus('processing')
-        executeStep(taskId, 7, { 
-          selected_topic: selectedTopic,
-          materials: userMaterials 
-        })
-        return
-      }
+      
     } catch (err: any) {
       setError(err.message || '确认失败')
       setIsExecuting(false)
@@ -968,8 +924,8 @@ export default function WorkbenchPage() {
             <Link href="/tasks" className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
               任务历史
             </Link>
-            <Link href="/materials" className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
-              素材管理
+            <Link href="/admin/knowledge" className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
+              知识库
             </Link>
             <Link href="/settings" className="px-4 py-2 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors">
               品牌资产
@@ -1016,9 +972,19 @@ export default function WorkbenchPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   需求简述
                 </label>
+                <div className="bg-blue-50 border border-blue-100 rounded-md px-4 py-3 mb-3 space-y-2">
+                  <p className="text-sm text-blue-800">
+                    <span className="font-medium">高分指令公式：</span>
+                    <span className="text-blue-700">【核心痛点】+【期望切入角度】+【补充具体场景/限制】+【字数与格式】</span>
+                  </p>
+                  <p className="text-sm text-blue-600 leading-relaxed">
+                    <span className="font-medium">参考示例：</span>
+                    针对"二年级只看漫画不看纯文字书"的痛点，请从"图像到文字的认知过渡"角度切入，结合孩子刚接触长文本时的畏难情绪，写一篇 1800 字的公号文。
+                  </p>
+                </div>
                 <textarea
                   className="input min-h-[120px] resize-none"
-                  placeholder="例如：我想写一篇关于《窗边的小豆豆》整本书阅读策略的文章，目标读者是小学生家长，期望3000字左右..."
+                  placeholder="请输入您的创作需求，建议参考上方示例..."
                   value={brief}
                   onChange={(e) => setBrief(e.target.value)}
                 />
@@ -1045,7 +1011,7 @@ export default function WorkbenchPage() {
                 恢复未完成的任务
               </button>
             </div>
-            
+
             {/* 9步流程预览 */}
             <div className="mt-8 card">
               <h3 className="text-lg font-semibold mb-4">9步完整SOP流程</h3>
@@ -1125,7 +1091,10 @@ export default function WorkbenchPage() {
                             {item.checkpoint && (
                               <span className="text-xs text-gray-400">卡点</span>
                             )}
-                            {hasOutput && (
+                            {(item.step === 5 || item.step === 6) && (
+                              <span className="text-xs text-gray-400">自动</span>
+                            )}
+                            {hasOutput && item.step !== 5 && item.step !== 6 && (
                               <span className="text-xs text-[#3a5e98]">● 可查看</span>
                             )}
                           </div>
@@ -1157,16 +1126,87 @@ export default function WorkbenchPage() {
                       <h2 className="text-xl font-semibold text-[#3a5e98]">
                         查看 Step {viewingStep}: {WORKFLOW_STEPS[viewingStep - 1]?.name || '历史输出'}
                 </h2>
-                      <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded">历史记录</span>
+                      
                     </div>
                 
                   <div className="space-y-4">
-                    {/* 步骤描述 */}
+                    {/* 步骤描述：Step 5 替换为 Callout 卡片，其余步骤保持通用样式 */}
+                    {viewingStep === 5 ? (
+                      selectedSamples.length > 0 ? (
+                        /* 已锁定：显示实际抽取的样文 */
+                        <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                          <div className="flex items-start gap-3">
+                            <CheckCircle2 className="w-5 h-5 text-blue-600 flex-shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-slate-800">风格基调已自动锁定</p>
+                              <p className="text-sm text-slate-500 mt-1">
+                                AI 已从样文库中自动抽取了以下标杆文章，接下来的创作将严格复刻它们的排版格式与语气节奏：
+                              </p>
+                              <div className="mt-3 flex flex-col gap-2">
+                                {selectedSamples.map((s) => (
+                                  <div
+                                    key={s.id}
+                                    className="flex items-center bg-white border border-slate-200 rounded-md px-3 py-2 shadow-sm"
+                                  >
+                                    <FileText className="w-4 h-4 text-slate-400 mr-2 flex-shrink-0" />
+                                    <span className="text-sm text-slate-700">《{s.title}》</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : allSamples.length > 0 ? (
+                        /* 待锁定：Step 7 尚未执行，显示样文库预览 */
+                        <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                          <div className="flex items-start gap-3">
+                            <Clock className="w-5 h-5 text-slate-400 flex-shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-slate-800">样文风格待锁定</p>
+                              <p className="text-sm text-slate-500 mt-1">
+                                AI 将在 Step 7 初稿创作时，从以下 {allSamples.length} 篇样文中随机抽取 1–2 篇作为排版与语气参考：
+                              </p>
+                              <div className="mt-3 flex flex-col gap-2">
+                                {allSamples.map((s: any) => (
+                                  <div
+                                    key={s.id}
+                                    className="flex items-center bg-white border border-slate-200 rounded-md px-3 py-2 shadow-sm"
+                                  >
+                                    <FileText className="w-4 h-4 text-slate-400 mr-2 flex-shrink-0" />
+                                    <span className="text-sm text-slate-700">《{s.title}》</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        /* 无样文库数据：降级显示默认描述 */
+                        <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-5 h-5 text-slate-400" />
+                            <p className="text-sm text-slate-600">风格基调已自动锁定</p>
+                          </div>
+                        </div>
+                      )
+                    ) : viewingStep === 6 ? (
+                      /* Step 6: 创作准备 — 极简状态卡片 */
+                      <div className="bg-slate-50 border border-slate-100 rounded-lg p-4">
+                        <div className="flex items-start gap-3">
+                          <Layers className="w-5 h-5 text-slate-700 flex-shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-slate-800">创作上下文已自动封装</p>
+                            <p className="text-sm text-slate-500 mt-1">系统已整合 RAG 检索事实与标杆样文特征，无缝切入初稿创作阶段。</p>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
                       <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
                         <p className="text-sm text-gray-700">
                           {WORKFLOW_STEPS[viewingStep - 1]?.desc}
-                      </p>
-                    </div>
+                        </p>
+                      </div>
+                    )}
                       
                       {/* 历史输出内容 - 根据步骤类型选择渲染方式 */}
                       {stepOutputs[viewingStep] ? (
@@ -1209,23 +1249,38 @@ export default function WorkbenchPage() {
                                     <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                                     </svg>
-                                    参考来源（{knowledgeSources.length} 条真实搜索结果）
+                                    参考来源（{knowledgeSources.length} 条）
                                   </p>
                                   <ul className="space-y-1.5">
                                     {knowledgeSources.slice(0, 5).map((source, idx) => (
                                       <li key={idx} className="text-xs">
-                                        <a 
-                                          href={source.url} 
-                                          target="_blank" 
-                                          rel="noopener noreferrer"
-                                          className="text-blue-600 hover:text-blue-800 hover:underline flex items-start gap-1"
-                                        >
-                                          <span className="text-gray-400 shrink-0">{idx + 1}.</span>
-                                          <span className="line-clamp-1">{source.title || source.url}</span>
-                                          <svg className="w-3 h-3 shrink-0 mt-0.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                                          </svg>
-                                        </a>
+                                        {source.url === 'internal_database' || !source.url?.startsWith('http') ? (
+                                          <span className="flex items-start gap-1">
+                                            <span className="text-gray-400 shrink-0">{idx + 1}.</span>
+                                            <span className="inline-flex items-center gap-1">
+                                              <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-blue-50 text-[#3a5e98] text-[10px] font-medium shrink-0">
+                                                <svg className="w-2.5 h-2.5 mr-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                                                </svg>
+                                                内部库
+                                              </span>
+                                              <span className="line-clamp-1 text-gray-700">{source.title || '内部资料'}</span>
+                                            </span>
+                                          </span>
+                                        ) : (
+                                          <a 
+                                            href={source.url} 
+                                            target="_blank" 
+                                            rel="noopener noreferrer"
+                                            className="text-blue-600 hover:text-blue-800 hover:underline flex items-start gap-1"
+                                          >
+                                            <span className="text-gray-400 shrink-0">{idx + 1}.</span>
+                                            <span className="line-clamp-1">{source.title || source.url}</span>
+                                            <svg className="w-3 h-3 shrink-0 mt-0.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                            </svg>
+                                          </a>
+                                        )}
                                       </li>
                                     ))}
                                   </ul>
@@ -1360,10 +1415,9 @@ export default function WorkbenchPage() {
                             })()}
                           </div>
                         ) : viewingStep === 5 ? (
-                          /* Step 5: 风格建模 - 完整展示 */
+                          /* Step 5: 风格建模 - 辅助信息展示（主 Callout 已在步骤描述区渲染） */
                           <div className="space-y-4">
                             {(() => {
-                              // 使用页面状态中的数据
                               const sample = selectedSampleId 
                                 ? allSamples.find(s => s.id === selectedSampleId) || recommendedSample
                                 : recommendedSample
@@ -1373,34 +1427,6 @@ export default function WorkbenchPage() {
                               
                               return (
                                 <>
-                                  {/* 标杆样文 */}
-                                  {sample && (
-                                    <div className="bg-gradient-to-r from-[#3a5e98]/5 to-[#2a4a7a]/5 border border-[#3a5e98]/20 rounded-lg p-4">
-                                      <h4 className="text-sm font-semibold text-gray-800 mb-2 flex items-center gap-2">
-                                        <span>⭐</span> 标杆样文
-                                      </h4>
-                                      <p className="text-[#3a5e98] font-medium">📌 《{sample.title}》</p>
-                                      {sample.custom_tags?.length > 0 && (
-                                        <p className="text-sm text-gray-600 mt-1">🏷️ 标签：{sample.custom_tags.join('、')}</p>
-                                      )}
-                                      {/* 六维特征 */}
-                                      {(sample.style_profile || sample.features) && (
-                                        <div className="mt-3 pt-2 border-t border-[#3a5e98]/10 grid grid-cols-2 gap-2 text-xs text-gray-600">
-                                          {(() => {
-                                            const sp = sample.style_profile || sample.features
-                                            const getDesc = (val: any) => val?.description || val?.type || '—'
-                                            return (
-                                              <>
-                                                {sp.opening_style && <p>• 开头：{getDesc(sp.opening_style)}</p>}
-                                                {sp.tone && <p>• 语气：{getDesc(sp.tone)}</p>}
-                                                {sp.ending_style && <p>• 结尾：{getDesc(sp.ending_style)}</p>}
-                                              </>
-                                            )
-                                          })()}
-                                        </div>
-                                      )}
-                                    </div>
-                                  )}
                                   
                                   {/* 风格画像 */}
                                   {profile && (profile.style_portrait || profile.structural_logic?.length > 0) && (
@@ -1526,14 +1552,6 @@ export default function WorkbenchPage() {
                                     </div>
                                   )}
                                   
-                                  {/* 无内容时显示原始输出 */}
-                                  {!sample && !profile && !materials && stepOutputs[5] && (
-                                    <div className="bg-white border border-gray-200 rounded-lg p-4">
-                                      <pre className="whitespace-pre-wrap text-sm text-gray-700 font-sans">
-                                        {stepOutputs[5]}
-                                      </pre>
-                                    </div>
-                                  )}
                                 </>
                               )
                             })()}
@@ -1611,23 +1629,38 @@ export default function WorkbenchPage() {
                                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
                                   </svg>
-                                  参考来源（{knowledgeSources.length} 条真实搜索结果）
+                                  参考来源（{knowledgeSources.length} 条）
                                 </p>
                                 <ul className="space-y-1.5">
                                   {(showAllSources ? knowledgeSources : knowledgeSources.slice(0, 5)).map((source, idx) => (
                                     <li key={idx} className="text-xs">
-                                      <a 
-                                        href={source.url} 
-                                        target="_blank" 
-                                        rel="noopener noreferrer"
-                                        className="text-blue-600 hover:text-blue-800 hover:underline flex items-start gap-1"
-                                      >
-                                        <span className="text-gray-400 shrink-0">{idx + 1}.</span>
-                                        <span className="line-clamp-1">{source.title || source.url}</span>
-                                        <svg className="w-3 h-3 shrink-0 mt-0.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                                        </svg>
-                                      </a>
+                                      {source.url === 'internal_database' || !source.url?.startsWith('http') ? (
+                                        <span className="flex items-start gap-1">
+                                          <span className="text-gray-400 shrink-0">{idx + 1}.</span>
+                                          <span className="inline-flex items-center gap-1">
+                                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-blue-50 text-[#3a5e98] text-[10px] font-medium shrink-0">
+                                              <svg className="w-2.5 h-2.5 mr-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                                              </svg>
+                                              内部库
+                                            </span>
+                                            <span className="line-clamp-1 text-gray-700">{source.title || '内部资料'}</span>
+                                          </span>
+                                        </span>
+                                      ) : (
+                                        <a 
+                                          href={source.url} 
+                                          target="_blank" 
+                                          rel="noopener noreferrer"
+                                          className="text-blue-600 hover:text-blue-800 hover:underline flex items-start gap-1"
+                                        >
+                                          <span className="text-gray-400 shrink-0">{idx + 1}.</span>
+                                          <span className="line-clamp-1">{source.title || source.url}</span>
+                                          <svg className="w-3 h-3 shrink-0 mt-0.5 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                          </svg>
+                                        </a>
+                                      )}
                                     </li>
                                   ))}
                                 </ul>
@@ -1917,393 +1950,27 @@ export default function WorkbenchPage() {
                           </div>
                         )}
                       
-                      {/* Step 5: 风格确认（可编辑任务简报） */}
-                      {currentStep === 5 && (
+                      {/* Step 4: 协作文档确认 + 用户补充 */}
+                      {currentStep === 4 && (
                         <div className="space-y-4">
-                          {/* v3.5: 样文智能推荐卡片 */}
-                          {(recommendedSample || allSamples.length > 0) && (
-                            <div className="bg-gradient-to-r from-[#3a5e98]/5 to-[#2a4a7a]/5 border border-[#3a5e98]/20 rounded-xl p-4">
-                              <div className="flex items-center justify-between mb-3">
-                                <div className="flex items-center gap-2">
-                                  <svg className="w-5 h-5 text-[#3a5e98]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                                  </svg>
-                                  <span className="font-medium text-[#3a5e98]">Smart Match · 标杆样文</span>
-                                </div>
-                                {allSamples.length > 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setShowSampleSelector(!showSampleSelector)}
-                                    className="text-xs text-[#3a5e98] hover:text-[#2a4a7a] underline"
-                                  >
-                                    {showSampleSelector ? '收起' : `查看全部 ${allSamples.length} 篇`}
-                                  </button>
-                                )}
-                              </div>
-                              
-                              {/* 推荐的样文卡片 */}
-                              {recommendedSample && !showSampleSelector && (
-                                <div className={`bg-white rounded-lg p-4 border-2 ${selectedSampleId === recommendedSample.id ? 'border-[#3a5e98]' : 'border-transparent'}`}>
-                                  <div className="flex items-start justify-between">
-                                    <div className="flex-1">
-                                      <div className="flex items-center gap-2 mb-2">
-                                        <span className="text-xs bg-[#3a5e98] text-white px-2 py-0.5 rounded">AI推荐</span>
-                                        <h4 className="font-medium text-gray-900">{recommendedSample.title}</h4>
-                                      </div>
-                                      
-                                      {/* 自定义标签 */}
-                                      {recommendedSample.custom_tags?.length > 0 && (
-                                        <div className="flex flex-wrap gap-1 mb-2">
-                                          {recommendedSample.custom_tags.map((tag: string, i: number) => (
-                                            <span key={i} className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">
-                                              {tag}
-                                            </span>
-                                          ))}
-                                        </div>
-                                      )}
-                                      
-                                      {/* 6维特征摘要 */}
-                                      {recommendedSample.style_profile && (() => {
-                                        // 英文值到中文的翻译映射
-                                        const styleLabels: Record<string, string> = {
-                                          // 开头风格
-                                          'direct': '直接引入', 'story': '故事引入', 'question': '问题引入', 'scene': '场景引入',
-                                          // 语气
-                                          'warm_friend': '温暖友好', 'professional': '专业严谨', 'casual': '轻松随意', 'emotional': '情感共鸣',
-                                          // 结尾风格
-                                          'thought': '引导思考', 'action': '行动号召', 'summary': '总结升华', 'open': '开放式',
-                                          // 节奏
-                                          'medium': '中等节奏', 'fast': '快节奏', 'slow': '慢节奏', 'varied': '变化丰富'
-                                        }
-                                        const translate = (val: any) => {
-                                          if (typeof val === 'object') return val?.type || val?.description?.slice(0, 8) || '—'
-                                          return styleLabels[val] || val || '—'
-                                        }
-                                        return (
-                                          <div className="grid grid-cols-3 gap-2 text-xs mt-2">
-                                            <div className="bg-gray-50 px-2 py-1 rounded">
-                                              <span className="text-gray-500">开头：</span>
-                                              <span className="text-gray-700">{translate(recommendedSample.style_profile.opening_style)}</span>
-                                            </div>
-                                            <div className="bg-gray-50 px-2 py-1 rounded">
-                                              <span className="text-gray-500">句式：</span>
-                                              <span className="text-gray-700">{translate(recommendedSample.style_profile.sentence_pattern)}</span>
-                                            </div>
-                                            <div className="bg-gray-50 px-2 py-1 rounded">
-                                              <span className="text-gray-500">节奏：</span>
-                                              <span className="text-gray-700">{translate(recommendedSample.style_profile.paragraph_rhythm)}</span>
-                                            </div>
-                                            <div className="bg-gray-50 px-2 py-1 rounded">
-                                              <span className="text-gray-500">表达：</span>
-                                              <span className="text-gray-700">{translate(recommendedSample.style_profile.expressions)}</span>
-                                            </div>
-                                            <div className="bg-gray-50 px-2 py-1 rounded">
-                                              <span className="text-gray-500">语气：</span>
-                                              <span className="text-gray-700">{translate(recommendedSample.style_profile.tone)}</span>
-                                            </div>
-                                            <div className="bg-gray-50 px-2 py-1 rounded">
-                                              <span className="text-gray-500">结尾：</span>
-                                              <span className="text-gray-700">{translate(recommendedSample.style_profile.ending_style)}</span>
-                                            </div>
-                                          </div>
-                                        )
-                                      })()}
-                                    </div>
-                                    
-                                    {selectedSampleId === recommendedSample.id && (
-                                      <span className="text-[#3a5e98]">
-                                        <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
-                                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                        </svg>
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              )}
-                              
-                              {/* 全部样文列表 */}
-                              {showSampleSelector && (
-                                <div className="space-y-2 max-h-60 overflow-y-auto">
-                                  {allSamples.map((sample) => (
-                                    <button
-                                      key={sample.id}
-                                      type="button"
-                                      onClick={() => handleSelectSample(sample.id)}
-                                      className={`w-full text-left p-3 rounded-lg border-2 transition-all ${
-                                        selectedSampleId === sample.id 
-                                          ? 'border-[#3a5e98] bg-[#3a5e98]/5' 
-                                          : 'border-gray-200 hover:border-[#3a5e98]/50 bg-white'
-                                      }`}
-                                    >
-                                      <div className="flex items-start justify-between">
-                                        <div className="flex-1">
-                                          <div className="flex items-center gap-2 mb-1">
-                                            {recommendedSample?.id === sample.id && (
-                                              <span className="text-xs bg-[#3a5e98] text-white px-1.5 py-0.5 rounded">推荐</span>
-                                            )}
-                                            <span className="font-medium text-gray-900 text-sm">{sample.title}</span>
-                                          </div>
-                                          {sample.custom_tags?.length > 0 && (
-                                            <div className="flex flex-wrap gap-1">
-                                              {sample.custom_tags.slice(0, 4).map((tag: string, i: number) => (
-                                                <span key={i} className="text-xs bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded">
-                                                  {tag}
-                                                </span>
-                                              ))}
-                                              {sample.custom_tags.length > 4 && (
-                                                <span className="text-xs text-gray-400">+{sample.custom_tags.length - 4}</span>
-                                              )}
-                                            </div>
-                                          )}
-                                        </div>
-                                        {selectedSampleId === sample.id && (
-                                          <span className="text-[#3a5e98]">
-                                            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                                              <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                                            </svg>
-                                          </span>
-                                        )}
-                                      </div>
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                              
-                              {/* 无样文提示 */}
-                              {!recommendedSample && allSamples.length === 0 && (
-                                <div className="text-center py-4 text-gray-500 text-sm">
-                                  当前频道暂无样文，AI 将使用频道基础人设进行创作
-                                </div>
-                              )}
-                            </div>
-                          )}
-                          
-                          <div className="flex items-center justify-between">
-                            <p className="text-sm text-gray-700">
-                              {selectedSampleId ? '已选定标杆样文，您可以微调以下创作指南：' : 'AI 已完成风格建模，您可以微调以下创作指南：'}
-                            </p>
-                            {isStyleModified && (
-                              <span className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded-full">
-                                已修改
-                              </span>
-                            )}
-                          </div>
-                          
-                          {/* 风格画像精简展示 */}
-                          {styleProfile && (
-                            <div className="bg-white border border-[#3a5e98]/30 rounded-lg p-4 space-y-4">
-                              {/* 风格画像（只读） */}
-                              {styleProfile.style_portrait && (
-                                <div className="bg-[#3a5e98]/5 rounded-lg p-3">
-                                  <p className="text-sm font-medium text-[#3a5e98] mb-1">风格画像</p>
-                                  <p className="text-sm text-gray-700">"{styleProfile.style_portrait}"</p>
-                                </div>
-                              )}
-                              
-                              {/* 结构逻辑（只读） */}
-                              {styleProfile.structural_logic && (
-                                <div>
-                                  <p className="text-xs text-gray-500 mb-2">结构逻辑（必须按此顺序）</p>
-                                  <div className="flex flex-wrap items-center gap-1 text-xs">
-                                    {styleProfile.structural_logic.slice(0, 5).map((item: string, index: number) => (
-                                      <span key={index} className="flex items-center">
-                                        <span className="bg-gray-100 px-2 py-1 rounded text-gray-700">
-                                          {index + 1}. {item.length > 8 ? item.slice(0, 8) + '...' : item}
-                                        </span>
-                                        {index < Math.min(styleProfile.structural_logic.length, 5) - 1 && (
-                                          <span className="text-gray-400 mx-1">→</span>
-                                        )}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              
-                              {/* 可编辑的创作指南 */}
-                              <div className="border-t border-gray-200 pt-4">
-                                <div className="flex items-center justify-between mb-2">
-                                  <p className="text-xs text-gray-500">创作指南（可编辑）</p>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setEditedGuidelines([...editedGuidelines, ''])
-                                      setIsStyleModified(true)
-                                    }}
-                                    className="text-xs text-[#3a5e98] hover:underline"
-                                  >
-                                    + 添加规则
-                                  </button>
-                                </div>
-                                <div className="space-y-2">
-                                  {/* 获取创作指南：优先 editedGuidelines，否则从多个来源获取或动态生成 */}
-                                  {(() => {
-                                    // 获取选中的样文
-                                    const selectedSample = selectedSampleId 
-                                      ? allSamples.find(s => s.id === selectedSampleId) || recommendedSample
-                                      : recommendedSample
-                                    
-                                    // 从多个来源获取 writing_guidelines
-                                    let guidelines = editedGuidelines.length > 0 
-                                      ? editedGuidelines 
-                                      : (styleProfile?.writing_guidelines || 
-                                         selectedSample?.style_profile?.writing_guidelines ||
-                                         selectedSample?.features?.writing_guidelines ||
-                                         recommendedSample?.style_profile?.writing_guidelines ||
-                                         recommendedSample?.features?.writing_guidelines ||
-                                         [])
-                                    
-                                    // 如果没有 writing_guidelines，基于样文特征动态生成
-                                    if (guidelines.length === 0 && (selectedSample || styleProfile)) {
-                                      const f = selectedSample?.style_profile || selectedSample?.features || styleProfile
-                                      const generated: string[] = []
-                                      
-                                      // 基于开头类型生成指南
-                                      if (f?.opening_style?.type === 'story_intro') {
-                                        generated.push('使用故事或场景引入开头')
-                                      } else if (f?.opening_style?.type === 'direct') {
-                                        generated.push('开门见山，直接切入主题')
-                                      } else if (f?.opening_style?.type === 'question') {
-                                        generated.push('使用设问式开头，引发读者思考')
-                                      }
-                                      
-                                      // 基于语气类型生成指南
-                                      if (f?.tone?.type === 'warm_friend') {
-                                        generated.push('保持温润亲切的语气，像朋友聊天')
-                                      } else if (f?.tone?.type === 'professional') {
-                                        generated.push('保持专业权威的语气')
-                                      }
-                                      
-                                      // 基于句式特征生成指南
-                                      if (f?.sentence_pattern?.short_ratio > 0.5) {
-                                        generated.push('多用短句，节奏明快')
-                                      } else if (f?.sentence_pattern?.avg_length > 25) {
-                                        generated.push('可使用长句舒展表达')
-                                      } else {
-                                        generated.push('长短句交替，保持节奏感')
-                                      }
-                                      
-                                      // 基于结尾类型生成指南
-                                      if (f?.ending_style?.type === 'reflection') {
-                                        generated.push('结尾引导思考，留有余味')
-                                      } else if (f?.ending_style?.type === 'emotional') {
-                                        generated.push('结尾升华情感，引发共鸣')
-                                      } else if (f?.ending_style?.type === 'practical') {
-                                        generated.push('结尾给出实用建议或总结')
-                                      }
-                                      
-                                      // 通用指南
-                                      generated.push('融入真实经历和案例，避免说教')
-                                      
-                                      guidelines = generated
-                                    }
-                                    
-                                    if (guidelines.length === 0) {
-                                      return (
-                                        <p className="text-xs text-gray-400 italic py-2">暂无创作指南，点击"+ 添加规则"创建</p>
-                                      )
-                                    }
-                                    
-                                    return guidelines.map((guide: string, index: number) => (
-                                      <div key={index} className="flex items-start gap-2">
-                                        <span className="text-xs text-[#3a5e98] mt-2 w-4">{index + 1}.</span>
-                                        <input
-                                          type="text"
-                                          value={guide}
-                                          onChange={(e) => {
-                                            // 如果是首次编辑，先初始化 editedGuidelines
-                                            const currentGuidelines = editedGuidelines.length > 0 ? editedGuidelines : guidelines
-                                            const newGuidelines = [...currentGuidelines]
-                                            newGuidelines[index] = e.target.value
-                                            setEditedGuidelines(newGuidelines)
-                                            setIsStyleModified(true)
-                                          }}
-                                          className="flex-1 text-xs p-2 border border-gray-200 rounded focus:ring-1 focus:ring-[#3a5e98] focus:border-[#3a5e98] bg-white"
-                                          placeholder="输入创作规则..."
-                                        />
-                                        <button
-                                          type="button"
-                                          onClick={() => {
-                                            const currentGuidelines = editedGuidelines.length > 0 ? editedGuidelines : guidelines
-                                            const newGuidelines = currentGuidelines.filter((_: string, i: number) => i !== index)
-                                            setEditedGuidelines(newGuidelines)
-                                            setIsStyleModified(true)
-                                          }}
-                                          className="text-gray-400 hover:text-red-500 mt-2"
-                                        >
-                                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                          </svg>
-                                        </button>
-                                      </div>
-                                    ))
-                                  })()}
-                                </div>
-                              </div>
-                              
-                              {/* 本篇特殊要求 */}
-                              <div className="border-t border-gray-200 pt-4">
-                                <p className="text-xs text-gray-500 mb-2">本篇特殊要求（可选）</p>
-                                <textarea
-                                  value={customRequirement}
-                                  onChange={(e) => {
-                                    setCustomRequirement(e.target.value)
-                                    setIsStyleModified(e.target.value.trim() !== '')
-                                  }}
-                                  className="w-full text-xs p-3 border border-gray-200 rounded-lg focus:ring-1 focus:ring-[#3a5e98] focus:border-[#3a5e98] bg-white resize-none"
-                                  rows={3}
-                                  placeholder="例如：请在文中加入张妈妈的真实反馈案例；开头使用「那天早上...」的叙事方式"
-                                />
-                              </div>
-                            </div>
-                          )}
-                          
-                          <div className={`rounded-lg p-3 ${isStyleModified ? 'bg-orange-50 border border-orange-200' : 'bg-[#3a5e98]/10 border border-[#3a5e98]/20'}`}>
-                            <p className={`text-sm ${isStyleModified ? 'text-orange-800' : 'text-[#3a5e98]'}`}>
-                              {isStyleModified ? (
-                                <>
-                                  <strong>您已自定义创作规则</strong>，AI 将按照您修改后的指南进行创作，覆盖样文默认特征。
-                                </>
-                              ) : selectedSampleId ? (
-                                <>
-                                  <strong>确认后</strong>，AI 将严格复刻「{allSamples.find(s => s.id === selectedSampleId)?.title || recommendedSample?.title}」的写作风格与结构。
-                                </>
-                              ) : (
-                                <>
-                                  <strong>确认后</strong>，AI 将使用频道基础人设进行创作。
-                                </>
-                              )}
+                          <p className="text-sm text-gray-700">
+                            请阅读上方 AI 生成的协作文档。如有需要补充的信息（如真实案例细节、数据等），可在下方输入。
+                          </p>
+                          <textarea
+                            className="w-full p-3 border-2 border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-gray-400 focus:border-transparent bg-white text-sm leading-relaxed"
+                            rows={5}
+                            placeholder="在此输入补充信息（如真实案例细节、数据等）。如果确认无误且无需补充，请留空并直接点击「下一步」。"
+                            value={userSupplement}
+                            onChange={(e) => setUserSupplement(e.target.value)}
+                          />
+                          <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                            <p className="text-xs text-amber-700">
+                              <strong>提示</strong>：留空即表示无需补充，AI 将完全基于现有资料完成创作。
                             </p>
                           </div>
                         </div>
                       )}
-                        
-                      {/* Step 6: 素材确认 */}
-                      {currentStep === 6 && (
-                        <div className="space-y-4">
-                          <p className="text-sm text-gray-700">
-                            请提供您准备的真实素材，包括：真实案例、个人观点、数据支持等。
-                            <br />
-                            <strong>重要：请勿编造虚假信息！</strong>
-                          </p>
-                            <textarea
-                            className="w-full p-4 border-2 border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-gray-400 focus:border-transparent bg-white"
-                            rows={10}
-                            placeholder="请在此输入您的真实素材...
-
-例如：
-【真实案例】
-去年在XX小学做阅读推广时，有个四年级的孩子说...
-
-【个人观点】
-我认为整本书阅读最重要的是...
-
-【数据支持】
-根据我们的阅读调查数据..."
-                              value={userMaterials}
-                              onChange={(e) => setUserMaterials(e.target.value)}
-                            />
-                          </div>
-                        )}
+                      
                         
                         <button 
                         className="w-full py-3 bg-[#3a5e98] hover:bg-[#2d4a78] text-white font-semibold rounded-lg transition-colors disabled:opacity-50"
@@ -2311,16 +1978,24 @@ export default function WorkbenchPage() {
                         disabled={isExecuting}
                         >
                         {isExecuting ? '处理中...' : 
-                         currentStep === 5 ? '确认风格并继续' : '确认并继续'}
+                         currentStep === 4 ? '下一步' : '确认并继续'}
                         </button>
                       </div>
                     )}
                     
                   {/* 加载状态 */}
                   {isExecuting && status !== 'waiting_confirm' && (
-                    <div className="flex items-center justify-center space-x-3 py-8">
+                    <div className="flex flex-col items-center justify-center space-y-3 py-8">
                       <div className="animate-spin rounded-full h-8 w-8 border-4 border-gray-500 border-t-transparent"></div>
-                      <span className="text-gray-600 font-medium">AI 正在处理...</span>
+                      <span className="text-gray-600 font-medium">
+                        {currentStep === 5 ? '正在锁定样文风格...' :
+                         currentStep === 6 ? '正在整合素材，准备生成初稿...' :
+                         currentStep === 7 ? '正在深度融合参考资料，为您生成文章初稿...' :
+                         'AI 正在处理...'}
+                      </span>
+                      {(currentStep >= 5 && currentStep <= 7) && (
+                        <p className="text-xs text-gray-400">Step 5 ~ 7 将自动完成，请稍候</p>
+                      )}
                     </div>
                   )}
                   

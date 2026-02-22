@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
 数据库配置模块
-提供 PostgreSQL + pgvector 的连接配置
+提供 PostgreSQL + pgvector 的连接配置（同步 + 异步）
 """
 
 import os
 from typing import Generator
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from dotenv import load_dotenv
 
 # 加载环境变量
@@ -88,4 +89,30 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+# ============================================================================
+# 异步数据库引擎 & 会话工厂 (用于 ETL 脚本等异步场景)
+# ============================================================================
+
+def _get_async_database_url() -> str:
+    """将同步 URL 转换为 asyncpg 驱动的异步 URL"""
+    url = get_database_url()
+    return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
+async_engine = create_async_engine(
+    _get_async_database_url(),
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+    pool_recycle=300,
+    echo=os.getenv("DB_ECHO", "false").lower() == "true"
+)
+
+async_session_maker = async_sessionmaker(
+    async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
 

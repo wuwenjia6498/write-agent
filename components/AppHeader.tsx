@@ -18,7 +18,7 @@ export default function AppHeader({ title, subtitle, children }: AppHeaderProps)
     { href: '/workbench', label: '工作台' },
     { href: '/channels', label: '频道管理' },
     { href: '/tasks', label: '任务历史' },
-    { href: '/materials', label: '素材管理' },
+    { href: '/admin/knowledge', label: '知识库' },
     { href: '/settings', label: '品牌资产' },
   ]
   

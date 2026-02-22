@@ -714,6 +714,94 @@ class WritingTask(Base):
 
 
 # ============================================================================
+# E. curriculum_books (课标书籍结构化表)
+# 存储从 CSV 导入的课标推荐书目数据
+# ============================================================================
+class CurriculumBook(Base):
+    """
+    课标推荐书籍表（结构化数据）
+
+    存储各年级课标推荐书目的基本信息与阅读指导内容。
+    数据来源：data_source/primary_school/books.csv
+
+    Attributes:
+        id: 自增主键
+        title: 书名
+        author: 作者
+        grade: 年级（如：一年级、六年级）
+        content_intro: 内容介绍
+        reading_suggestion: 阅读建议（阅读要点 + 阅读建议合并）
+        created_at: 导入时间
+    """
+    __tablename__ = "curriculum_books"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="自增主键")
+    title = Column(String(200), nullable=False, comment="书名")
+    author = Column(String(200), nullable=True, comment="作者")
+    grade = Column(String(50), nullable=True, comment="年级，如：一年级、六年级")
+    content_intro = Column(Text, nullable=True, comment="内容介绍")
+    reading_suggestion = Column(Text, nullable=True, comment="阅读建议（含阅读要点）")
+    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
+
+    def __repr__(self):
+        return f"<CurriculumBook(id={self.id}, title='{self.title}', grade='{self.grade}')>"
+
+
+# ============================================================================
+# F. knowledge_chunks (知识切片向量表)
+# 存储从文档中提取并向量化的知识片段，用于 RAG 检索
+# ============================================================================
+class KnowledgeChunk(Base):
+    """
+    知识切片向量表（非结构化 RAG 数据）
+
+    存储从 .docx / .pdf 文件中提取、切片、向量化后的文本片段。
+    按 channel_scope 区分所属频道，按 material_type 区分文档类型。
+
+    Attributes:
+        id: 自增主键
+        content: 切片后的文本内容
+        embedding: 1536 维向量（OpenAI text-embedding-ada-002）
+        channel_scope: 频道范围，'deep_reading' / 'picture_books' / 'parenting'
+        material_type: 文档类型，按频道区分：
+            deep_reading  → lesson_plan / article / course_info / theory_book
+            picture_books → booklist / qa / guide_book
+            parenting     → article / parenting_book
+        tags: JSONB 元数据或关键词
+        source_filename: 来源文件名
+        created_at: 导入时间
+    """
+    __tablename__ = "knowledge_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True, comment="自增主键")
+    content = Column(Text, nullable=False, comment="切片文本内容")
+    embedding = Column(Vector(1536), nullable=True, comment="1536维向量 (OpenAI)")
+    channel_scope = Column(
+        String(50), nullable=False,
+        comment="频道范围: 'deep_reading' / 'picture_books' / 'parenting'"
+    )
+    material_type = Column(
+        String(50), nullable=False,
+        comment=(
+            "文档类型: "
+            "deep_reading → lesson_plan / article / course_info / theory_book; "
+            "picture_books → booklist / qa / guide_book; "
+            "parenting → article / parenting_book"
+        )
+    )
+    tags = Column(JSONB, nullable=True, default=list, comment="元数据/关键词标签")
+    source_filename = Column(String(255), nullable=True, comment="来源文件名")
+    created_at = Column(DateTime, default=datetime.utcnow, comment="创建时间")
+
+    __table_args__ = (
+        Index("ix_knowledge_channel_type", "channel_scope", "material_type"),
+    )
+
+    def __repr__(self):
+        return f"<KnowledgeChunk(id={self.id}, scope='{self.channel_scope}', type='{self.material_type}')>"
+
+
+# ============================================================================
 # 辅助函数：创建 pgvector 扩展和索引
 # ============================================================================
 def create_vector_extension(engine):

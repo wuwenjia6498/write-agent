@@ -27,7 +27,6 @@ interface Channel {
   channel_name: string
   description: string
   target_audience: string
-  brand_personality: string
 }
 
 export default function ChannelsPage() {
@@ -43,13 +42,11 @@ export default function ChannelsPage() {
     slug: '',
     description: '',
     target_audience: '',   // 目标读者
-    brand_personality: '', // 品牌人格
     role: '',
     writing_style: '',
     must_do: '',           // 必须遵守（每行一条）
     must_not_do: '',       // 严格禁止（每行一条）
     blocked_phrases: [] as string[],  // 屏蔽词（数组）
-    material_tags: [] as string[]     // 素材标签（数组）
   })
   const [creating, setCreating] = useState(false)
   
@@ -60,36 +57,20 @@ export default function ChannelsPage() {
     name: '',
     description: '',
     target_audience: '',
-    brand_personality: '',
     role: '',
     writing_style: '',
     must_do: '',
     must_not_do: '',
-    blocked_phrases: [] as string[],   // 改为数组，配合 TagInput
-    material_tags: [] as string[]      // 改为数组，配合 TagInput
+    blocked_phrases: [] as string[],
   })
   const [editing, setEditing] = useState(false)
   
-  // 样文管理 (v3.5)
+  // 样文管理（v4.5 极简版）
   const [styleSamples, setStyleSamples] = useState<any[]>([])
   const [isAddSampleDialogOpen, setIsAddSampleDialogOpen] = useState(false)
-  const [newSample, setNewSample] = useState({ title: '', content: '', source: '', custom_tags: [] as string[] })
+  const [newSample, setNewSample] = useState({ title: '', content: '', source: '' })
   const [addingSample, setAddingSample] = useState(false)
   const [viewingSample, setViewingSample] = useState<any>(null)
-  const [analyzing, setAnalyzing] = useState(false)
-  const [reanalyzingSampleId, setReanalyzingSampleId] = useState<string | null>(null)
-  
-  // 标签编辑 (v3.5)
-  const [editingTagsSampleId, setEditingTagsSampleId] = useState<string | null>(null)
-  const [newTagInput, setNewTagInput] = useState('')
-  // 预设标签库（按分类）
-  const [presetTagLibrary, setPresetTagLibrary] = useState<{
-    内容?: string[]
-    调性?: string[]
-  }>({ 内容: [], 调性: [] })
-  const [allPresetTags, setAllPresetTags] = useState<string[]>([])
-  // 兼容旧代码的扁平标签列表
-  const presetTags = [...(presetTagLibrary.内容 || []), ...(presetTagLibrary.调性 || [])]
   
     const fetchChannels = async () => {
       try {
@@ -144,20 +125,19 @@ export default function ChannelsPage() {
           slug: newChannel.slug,
           description: newChannel.description,
           target_audience: newChannel.target_audience,
-          brand_personality: newChannel.brand_personality,
+          brand_personality: '',
           system_prompt: systemPrompt,
           channel_rules: channelRules,
-          // 直接使用数组
           blocked_phrases: newChannel.blocked_phrases,
-          material_tags: newChannel.material_tags
+          material_tags: []
         })
       })
 
       if (res.ok) {
         setIsCreateDialogOpen(false)
         setNewChannel({ 
-          name: '', slug: '', description: '', target_audience: '', brand_personality: '',
-          role: '', writing_style: '', must_do: '', must_not_do: '', blocked_phrases: [], material_tags: []
+          name: '', slug: '', description: '', target_audience: '',
+          role: '', writing_style: '', must_do: '', must_not_do: '', blocked_phrases: []
         })
         await fetchChannels()
         setSelectedChannel('')
@@ -204,20 +184,15 @@ export default function ChannelsPage() {
       name: channelDetails.channel_name || '',
       description: channelDetails.description || '',
       target_audience: channelDetails.target_audience || '',
-      brand_personality: channelDetails.brand_personality || '',
       role: systemPrompt.role || '',
       writing_style: Array.isArray(systemPrompt.writing_style) 
         ? systemPrompt.writing_style.join('\n') 
         : '',
       must_do: Array.isArray(rules.must_do) ? rules.must_do.join('\n') : '',
       must_not_do: Array.isArray(rules.must_not_do) ? rules.must_not_do.join('\n') : '',
-      // 直接使用数组，配合 TagInput 组件
       blocked_phrases: Array.isArray(channelDetails.blocked_phrases) 
         ? channelDetails.blocked_phrases 
         : [],
-      material_tags: Array.isArray(channelDetails.material_tags) 
-        ? channelDetails.material_tags 
-        : []
     })
     setIsEditDialogOpen(true)
   }
@@ -243,7 +218,6 @@ export default function ChannelsPage() {
         must_not_do: editChannel.must_not_do ? editChannel.must_not_do.split('\n').filter(Boolean) : []
       }
       
-      // blocked_phrases 和 material_tags 已经是数组格式，直接使用
       const res = await fetch(`${API_BASE}/channels/${editChannel.slug}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -251,11 +225,11 @@ export default function ChannelsPage() {
           name: editChannel.name,
           description: editChannel.description,
           target_audience: editChannel.target_audience,
-          brand_personality: editChannel.brand_personality,
+          brand_personality: '',
           system_prompt: systemPrompt,
           channel_rules: channelRules,
           blocked_phrases: editChannel.blocked_phrases,
-          material_tags: editChannel.material_tags
+          material_tags: []
         })
       })
 
@@ -283,11 +257,7 @@ export default function ChannelsPage() {
         const data = await response.json()
         setChannelDetails(data)
         setSelectedChannel(channelId)
-        // 加载标杆样文和预设标签
-        await Promise.all([
-          loadStyleSamples(channelId),
-          loadPresetTags(channelId)
-        ])
+        await loadStyleSamples(channelId)
       }
     } catch (error) {
       console.error('获取频道详情失败:', error)
@@ -308,28 +278,7 @@ export default function ChannelsPage() {
     }
   }
   
-  // 加载预设标签库
-  const loadPresetTags = async (channelSlug: string) => {
-    try {
-      const response = await fetch(`${API_BASE}/channels/${channelSlug}/style-samples/preset-tags`)
-      if (response.ok) {
-        const data = await response.json()
-        // 新格式：{ tags: { 内容: [...], 调性: [...] }, all_tags: [...] }
-        if (data.tags) {
-          setPresetTagLibrary(data.tags)
-          setAllPresetTags(data.all_tags || [])
-        } else {
-          // 兼容旧格式（纯数组）
-          setPresetTagLibrary({ 内容: data, 调性: [] })
-          setAllPresetTags(data)
-        }
-      }
-    } catch (error) {
-      console.error('获取预设标签失败:', error)
-    }
-  }
-  
-  // 添加样文 (v3.5 支持 custom_tags)
+  // 添加样文（v4.5 极简版：标题+内容+来源）
   const handleAddSample = async () => {
     if (!newSample.title.trim() || !newSample.content.trim()) {
       alert('请填写样文标题和内容')
@@ -345,13 +294,12 @@ export default function ChannelsPage() {
           title: newSample.title,
           content: newSample.content,
           source: newSample.source,
-          custom_tags: newSample.custom_tags || []
         })
       })
       
       if (response.ok) {
         setIsAddSampleDialogOpen(false)
-        setNewSample({ title: '', content: '', source: '', custom_tags: [] })
+        setNewSample({ title: '', content: '', source: '' })
         await loadStyleSamples(selectedChannel)
       } else {
         const error = await response.json()
@@ -361,64 +309,6 @@ export default function ChannelsPage() {
       alert(error.message || '添加样文失败')
     } finally {
       setAddingSample(false)
-    }
-  }
-  
-  // 重新分析风格
-  const handleReanalyzeStyle = async () => {
-    if (styleSamples.length === 0) {
-      alert('请先添加样文')
-      return
-    }
-    
-    setAnalyzing(true)
-    try {
-      const response = await fetch(`${API_BASE}/channels/${selectedChannel}/analyze-style`, {
-        method: 'POST'
-      })
-      
-      if (response.ok) {
-        const result = await response.json()
-        // 更新 channelDetails 中的 style_profile
-        setChannelDetails((prev: any) => ({
-          ...prev,
-          style_profile: result.style_profile
-        }))
-        alert('风格分析完成！')
-      } else {
-        const error = await response.json()
-        throw new Error(error.detail || '分析失败')
-      }
-    } catch (error: any) {
-      console.error('风格分析失败:', error)
-      alert(error.message || '风格分析失败，请重试')
-    } finally {
-      setAnalyzing(false)
-    }
-  }
-  
-  // 重新分析单篇样文
-  const handleReanalyzeSample = async (sampleId: string) => {
-    setReanalyzingSampleId(sampleId)
-    try {
-      const response = await fetch(`${API_BASE}/channels/${selectedChannel}/style-samples/${sampleId}/analyze`, {
-        method: 'POST'
-      })
-      
-      if (response.ok) {
-        const result = await response.json()
-        // 更新本地样文列表中的特征
-        setStyleSamples(prev => prev.map(s => 
-          s.id === sampleId ? { ...s, features: result.features } : s
-        ))
-      } else {
-        const error = await response.json()
-        throw new Error(error.detail || '分析失败')
-      }
-    } catch (error: any) {
-      alert(error.message || '重新分析失败')
-    } finally {
-      setReanalyzingSampleId(null)
     }
   }
   
@@ -440,53 +330,6 @@ export default function ChannelsPage() {
     } catch (error: any) {
       alert(error.message || '删除样文失败')
     }
-  }
-  
-  // v3.5: 更新样文标签
-  const handleUpdateSampleTags = async (sampleId: string, newTags: string[]) => {
-    try {
-      const response = await fetch(`${API_BASE}/channels/${selectedChannel}/style-samples/${sampleId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ custom_tags: newTags })
-      })
-      
-      if (response.ok) {
-        // 更新本地状态
-        setStyleSamples(prev => prev.map(s => 
-          s.id === sampleId ? { ...s, custom_tags: newTags } : s
-        ))
-      } else {
-        const error = await response.json()
-        throw new Error(error.detail || '更新失败')
-      }
-    } catch (error: any) {
-      alert(error.message || '更新标签失败')
-    }
-  }
-  
-  // v3.5: 添加标签
-  const handleAddTag = (sampleId: string, tag: string) => {
-    const sample = styleSamples.find(s => s.id === sampleId)
-    if (!sample) return
-    
-    const normalizedTag = tag.startsWith('#') ? tag : `#${tag}`
-    const currentTags = sample.custom_tags || []
-    
-    if (!currentTags.includes(normalizedTag)) {
-      const newTags = [...currentTags, normalizedTag]
-      handleUpdateSampleTags(sampleId, newTags)
-    }
-    setNewTagInput('')
-  }
-  
-  // v3.5: 删除标签
-  const handleRemoveTag = (sampleId: string, tagToRemove: string) => {
-    const sample = styleSamples.find(s => s.id === sampleId)
-    if (!sample) return
-    
-    const newTags = (sample.custom_tags || []).filter((t: string) => t !== tagToRemove)
-    handleUpdateSampleTags(sampleId, newTags)
   }
   
   return (
@@ -562,38 +405,26 @@ export default function ChannelsPage() {
                             />
                           </div>
                           
-                          {/* 目标读者 + 品牌人格 并排 */}
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <Label className="text-xs text-gray-500 font-normal">目标读者</Label>
-                              <AutoResizeTextarea
-                                minRows={2}
-                                maxRows={4}
-                                placeholder="如：7-12岁小学生家长，希望培养孩子深度阅读习惯"
-                                value={newChannel.target_audience}
-                                onChange={(e) => setNewChannel({ ...newChannel, target_audience: e.target.value })}
-                                className="mt-1.5"
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs text-gray-500 font-normal">品牌人格</Label>
-                              <AutoResizeTextarea
-                                minRows={2}
-                                maxRows={4}
-                                placeholder="如：资深阅读推广人，温暖而专业"
-                                value={newChannel.brand_personality}
-                                onChange={(e) => setNewChannel({ ...newChannel, brand_personality: e.target.value })}
-                                className="mt-1.5"
-                              />
-                            </div>
-                          </div>
                         </div>
                         
-                        {/* ========== 2. 创作策略 ========== */}
+                        {/* ========== 2. AI 写作人格 ========== */}
                         <div className="mb-6">
                           <div className="flex items-center gap-2 mb-4">
-                            <span className="text-sm font-semibold text-gray-700">2. 创作策略</span>
+                            <span className="text-sm font-semibold text-gray-700">2. AI 写作人格</span>
                             <div className="flex-1 h-px bg-gray-200" />
+                          </div>
+                          
+                          {/* 目标读者 */}
+                          <div className="mb-5">
+                            <Label className="text-xs text-gray-500 font-normal">目标读者</Label>
+                            <AutoResizeTextarea
+                              minRows={2}
+                              maxRows={4}
+                              placeholder="如：7-12岁小学生家长，希望培养孩子深度阅读习惯"
+                              value={newChannel.target_audience}
+                              onChange={(e) => setNewChannel({ ...newChannel, target_audience: e.target.value })}
+                              className="mt-1.5"
+                            />
                           </div>
                           
                           {/* AI 角色定位 */}
@@ -665,28 +496,16 @@ export default function ChannelsPage() {
                             </div>
                           </div>
                           
-                          {/* 屏蔽词 + 素材标签 并排 - 使用 TagInput */}
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <Label className="text-xs text-gray-500 font-normal">频道屏蔽词</Label>
-                              <p className="text-[10px] text-gray-400 mt-0.5 mb-1.5">输入后按回车添加，支持逗号分隔批量粘贴</p>
-                              <TagInput
-                                value={newChannel.blocked_phrases}
-                                onChange={(tags) => setNewChannel({ ...newChannel, blocked_phrases: tags })}
-                                placeholder="输入屏蔽词..."
-                                variant="gray"
-                              />
-                            </div>
-                            <div>
-                              <Label className="text-xs text-gray-500 font-normal">素材标签</Label>
-                              <p className="text-[10px] text-gray-400 mt-0.5 mb-1.5">用于关联素材库中的相关内容</p>
-                              <TagInput
-                                value={newChannel.material_tags}
-                                onChange={(tags) => setNewChannel({ ...newChannel, material_tags: tags })}
-                                placeholder="输入素材标签..."
-                                variant="blue"
-                              />
-                            </div>
+                          {/* 频道屏蔽词 */}
+                          <div>
+                            <Label className="text-xs text-gray-500 font-normal">频道屏蔽词</Label>
+                            <p className="text-[10px] text-gray-400 mt-0.5 mb-1.5">输入后按回车添加，支持逗号分隔批量粘贴</p>
+                            <TagInput
+                              value={newChannel.blocked_phrases}
+                              onChange={(tags) => setNewChannel({ ...newChannel, blocked_phrases: tags })}
+                              placeholder="输入屏蔽词..."
+                              variant="gray"
+                            />
                           </div>
                         </div>
                       </div>
@@ -773,7 +592,7 @@ export default function ChannelsPage() {
                           样文
                         </CardTitle>
                         <CardDescription>
-                          用于风格建模的参考文章（最多 5 篇）
+                          创作时将随机抽取 1-2 篇作为排版与语气参考（最多 5 篇）
                         </CardDescription>
                       </div>
                       <Dialog open={isAddSampleDialogOpen} onOpenChange={setIsAddSampleDialogOpen}>
@@ -790,7 +609,7 @@ export default function ChannelsPage() {
                           <DialogHeader>
                             <DialogTitle>添加样文</DialogTitle>
                             <DialogDescription>
-                              添加一篇代表该频道风格的文章，AI 将学习其写作风格
+                              添加一篇代表该频道风格的参考文章
                             </DialogDescription>
                           </DialogHeader>
                           <div className="space-y-4 py-4">
@@ -825,80 +644,6 @@ export default function ChannelsPage() {
                                 className="mt-1"
                               />
                             </div>
-                            
-                            {/* v3.5: 自定义标签 - 按分类显示 */}
-                            <div>
-                              <Label>风格标签（可选）</Label>
-                              <p className="text-xs text-gray-500 mt-1 mb-3">
-                                为样文添加标签，便于 AI 在创作时自动匹配最合适的样文
-                              </p>
-                              
-                              {/* 内容标签 */}
-                              {(presetTagLibrary.内容 || []).length > 0 && (
-                                <div className="mb-3">
-                                  <span className="text-xs text-gray-500 font-medium">内容标签</span>
-                                  <div className="flex flex-wrap gap-1.5 mt-1.5">
-                                    {(presetTagLibrary.内容 || []).map((tag, i) => (
-                                      <button
-                                        key={`content-${i}`}
-                                        type="button"
-                                        onClick={() => {
-                                          const currentTags = newSample.custom_tags || []
-                                          if (currentTags.includes(tag)) {
-                                            setNewSample({ ...newSample, custom_tags: currentTags.filter(t => t !== tag) })
-                                          } else {
-                                            setNewSample({ ...newSample, custom_tags: [...currentTags, tag] })
-                                          }
-                                        }}
-                                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                                          (newSample.custom_tags || []).includes(tag)
-                                            ? 'bg-[#3a5e98] text-white border-[#3a5e98]'
-                                            : 'bg-white text-gray-600 border-gray-300 hover:border-[#3a5e98]'
-                                        }`}
-                                      >
-                                        {tag}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              
-                              {/* 调性标签 */}
-                              {(presetTagLibrary.调性 || []).length > 0 && (
-                                <div>
-                                  <span className="text-xs text-gray-500 font-medium">调性标签</span>
-                                  <div className="flex flex-wrap gap-1.5 mt-1.5">
-                                    {(presetTagLibrary.调性 || []).map((tag, i) => (
-                                      <button
-                                        key={`tone-${i}`}
-                                        type="button"
-                                        onClick={() => {
-                                          const currentTags = newSample.custom_tags || []
-                                          if (currentTags.includes(tag)) {
-                                            setNewSample({ ...newSample, custom_tags: currentTags.filter(t => t !== tag) })
-                                          } else {
-                                            setNewSample({ ...newSample, custom_tags: [...currentTags, tag] })
-                                          }
-                                        }}
-                                        className={`text-xs px-3 py-1.5 rounded-full border transition-colors ${
-                                          (newSample.custom_tags || []).includes(tag)
-                                            ? 'bg-[#5a8a5e] text-white border-[#5a8a5e]'
-                                            : 'bg-white text-gray-600 border-gray-300 hover:border-[#5a8a5e]'
-                                        }`}
-                                      >
-                                        {tag}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                              
-                              {(newSample.custom_tags || []).length > 0 && (
-                                <p className="text-xs text-[#3a5e98] mt-3">
-                                  已选择：{(newSample.custom_tags || []).join('、')}
-                                </p>
-                              )}
-                            </div>
                           </div>
                           <DialogFooter>
                             <Button variant="outline" onClick={() => setIsAddSampleDialogOpen(false)}>
@@ -909,7 +654,7 @@ export default function ChannelsPage() {
                               onClick={handleAddSample}
                               disabled={addingSample}
                             >
-                              {addingSample ? '添加中...' : '添加并分析'}
+                              {addingSample ? '保存中...' : '保存样文'}
                             </Button>
                           </DialogFooter>
                         </DialogContent>
@@ -923,222 +668,40 @@ export default function ChannelsPage() {
                         <p className="text-xs mt-1">添加 3-5 篇代表性文章，AI 将学习其风格</p>
                       </div>
                     ) : (
-                      <div className="space-y-4">
+                      <div className="space-y-3">
                         {styleSamples.map((sample, index) => (
                           <div 
                             key={sample.id} 
                             className="p-4 bg-white rounded-xl border border-gray-200 hover:border-[#3a5e98]/50 hover:shadow-md transition-all cursor-pointer"
                             onClick={() => setViewingSample(sample)}
                           >
-                            {/* 头部：标题 + 操作按钮 */}
-                            <div className="flex items-start justify-between mb-3">
-                              <div className="flex-1">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-1">
-                                  <span className="w-6 h-6 bg-[#3a5e98] text-white rounded-full flex items-center justify-center text-xs font-medium">
+                                  <span className="w-6 h-6 bg-[#3a5e98] text-white rounded-full flex items-center justify-center text-xs font-medium shrink-0">
                                     {index + 1}
                                   </span>
-                                  <h4 className="font-medium text-gray-900">{sample.title}</h4>
-                                  {(sample.features || sample.is_analyzed) && (
-                                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">
-                                      ✓ 已分析
-                                    </span>
-                                  )}
+                                  <h4 className="font-medium text-gray-900 truncate">{sample.title}</h4>
                                 </div>
                                 <div className="flex items-center gap-3 text-xs text-gray-400 ml-8">
                                   <span>{sample.word_count || sample.content?.length || 0} 字</span>
                                   {sample.source && <span>来源: {sample.source}</span>}
                                 </div>
-                              </div>
-                              <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleReanalyzeSample(sample.id)
-                                  }}
-                                  disabled={reanalyzingSampleId === sample.id}
-                                  className="text-gray-400 hover:text-[#3a5e98] h-8 px-2 text-xs"
-                                >
-                                  {reanalyzingSampleId === sample.id ? '分析中...' : '重新分析'}
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    handleDeleteSample(sample.id)
-                                  }}
-                                  className="text-gray-400 hover:text-red-600 h-8 px-2"
-                                >
-                                  删除
-                                </Button>
-                              </div>
-                            </div>
-                            
-                            {/* 结构逻辑和语气特征概括（一句话） */}
-                            {(sample.features || sample.style_profile) && (
-                              <div className="mb-3 px-3 py-2 bg-gray-50 rounded-lg border-l-3 border-[#3a5e98]">
-                                <p className="text-sm text-gray-700 leading-relaxed">
-                                  {(() => {
-                                    const f = sample.features || sample.style_profile
-                                    // 构建开头类型描述
-                                    const openingType = f?.opening_style?.type
-                                    const opening = openingType === 'story_intro' ? '故事引入开篇' :
-                                                    openingType === 'direct' ? '开门见山' :
-                                                    openingType === 'question' ? '设问式开头' :
-                                                    openingType === 'scene' ? '场景描写开篇' :
-                                                    f?.opening_style?.description?.slice(0, 6) || '自然开篇'
-                                    // 构建语气描述
-                                    const toneType = f?.tone?.type
-                                    const tone = toneType === 'warm_friend' ? '温润亲切' :
-                                                 toneType === 'professional' ? '专业权威' :
-                                                 toneType === 'literary' ? '文学气质' :
-                                                 toneType === 'conversational' ? '对话感强' :
-                                                 f?.tone?.description?.slice(0, 6) || '平和自然'
-                                    // 构建结尾类型描述
-                                    const endingType = f?.ending_style?.type
-                                    const ending = endingType === 'reflection' ? '引导思考收尾' :
-                                                   endingType === 'question' ? '提问式收尾' :
-                                                   endingType === 'emotional' ? '情感升华' :
-                                                   endingType === 'practical' ? '实用总结' :
-                                                   f?.ending_style?.description?.slice(0, 6) || '自然收尾'
-                                    return `${opening}，语气${tone}，${ending}。`
-                                  })()}
+                                <p className="text-xs text-gray-500 mt-2 ml-8 line-clamp-2 leading-relaxed">
+                                  {sample.content?.slice(0, 120)}...
                                 </p>
                               </div>
-                            )}
-                            
-                            {/* 自定义标签系统 (v3.5) - 阻止冒泡避免触发详情弹窗 */}
-                            <div className="border-t border-gray-100 pt-3" onClick={(e) => e.stopPropagation()}>
-                              <div className="flex items-center justify-between mb-2">
-                                <span className="text-xs text-gray-500 font-medium">风格标签</span>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    setEditingTagsSampleId(
-                                      editingTagsSampleId === sample.id ? null : sample.id
-                                    )
-                                  }}
-                                  className="text-xs text-[#3a5e98] hover:underline"
-                                >
-                                  {editingTagsSampleId === sample.id ? '完成' : '编辑'}
-                                </button>
-                              </div>
-                              
-                              <div className="flex flex-wrap gap-1.5">
-                                {/* 主编定义的标签（蓝色） */}
-                                {(sample.custom_tags || []).map((tag: string, i: number) => (
-                                  <span 
-                                    key={`custom-${i}`}
-                                    className="inline-flex items-center gap-1 bg-[#3a5e98] text-white px-2 py-0.5 rounded-full text-xs"
-                                  >
-                                    {tag}
-                                    {editingTagsSampleId === sample.id && (
-                                      <button
-                                        onClick={() => handleRemoveTag(sample.id, tag)}
-                                        className="hover:bg-white/20 rounded-full w-3.5 h-3.5 flex items-center justify-center"
-                                      >
-                                        ×
-                                      </button>
-                                    )}
-                                  </span>
-                                ))}
-                                
-                                {/* AI 建议的标签（灰色） */}
-                                {(sample.ai_suggested_tags || []).map((tag: string, i: number) => (
-                                  <span 
-                                    key={`ai-${i}`}
-                                    className="inline-flex items-center gap-1 bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full text-xs cursor-pointer hover:bg-gray-300"
-                                    onClick={() => handleAddTag(sample.id, tag)}
-                                    title="点击采纳为自定义标签"
-                                  >
-                                    {tag}
-                                    <span className="text-gray-400 text-[10px]">AI</span>
-                                  </span>
-                                ))}
-                                
-                                {/* 无标签提示 */}
-                                {(!sample.custom_tags || sample.custom_tags.length === 0) && 
-                                 (!sample.ai_suggested_tags || sample.ai_suggested_tags.length === 0) && (
-                                  <span className="text-xs text-gray-400">暂无标签，点击编辑添加</span>
-                                )}
-                              </div>
-                              
-                              {/* 标签编辑面板 */}
-                              {editingTagsSampleId === sample.id && (
-                                <div className="mt-3 p-3 bg-gray-50 rounded-lg">
-                                  <div className="flex gap-2 mb-2">
-                                    <Input
-                                      placeholder="输入标签名称（如：#绘本解析）"
-                                      value={newTagInput}
-                                      onChange={(e) => setNewTagInput(e.target.value)}
-                                      onKeyDown={(e) => {
-                                        if (e.key === 'Enter' && newTagInput.trim()) {
-                                          handleAddTag(sample.id, newTagInput.trim())
-                                        }
-                                      }}
-                                      className="h-8 text-xs"
-                                    />
-                                    <Button
-                                      size="sm"
-                                      onClick={() => {
-                                        if (newTagInput.trim()) {
-                                          handleAddTag(sample.id, newTagInput.trim())
-                                        }
-                                      }}
-                                      className="h-8 px-3 bg-[#3a5e98] hover:bg-[#2d4a78] text-xs"
-                                    >
-                                      添加
-                                    </Button>
-                                  </div>
-                                  <div className="text-xs text-gray-500 mb-2">快速选择预设标签：</div>
-                                  {/* 内容标签 */}
-                                  {(presetTagLibrary.内容 || []).length > 0 && (
-                                    <div className="mb-2">
-                                      <span className="text-[10px] text-gray-400">内容</span>
-                                      <div className="flex flex-wrap gap-1 mt-1">
-                                        {(presetTagLibrary.内容 || []).map((tag, i) => (
-                                          <button
-                                            key={`edit-content-${i}`}
-                                            onClick={() => handleAddTag(sample.id, tag)}
-                                            disabled={(sample.custom_tags || []).includes(tag)}
-                                            className={`text-xs px-2 py-1 rounded-full border transition-colors ${
-                                              (sample.custom_tags || []).includes(tag)
-                                                ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-                                                : 'bg-white text-gray-600 border-gray-300 hover:border-[#3a5e98] hover:text-[#3a5e98]'
-                                            }`}
-                                          >
-                                            {tag}
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                  {/* 调性标签 */}
-                                  {(presetTagLibrary.调性 || []).length > 0 && (
-                                    <div>
-                                      <span className="text-[10px] text-gray-400">调性</span>
-                                      <div className="flex flex-wrap gap-1 mt-1">
-                                        {(presetTagLibrary.调性 || []).map((tag, i) => (
-                                          <button
-                                            key={`edit-tone-${i}`}
-                                            onClick={() => handleAddTag(sample.id, tag)}
-                                            disabled={(sample.custom_tags || []).includes(tag)}
-                                            className={`text-xs px-2 py-1 rounded-full border transition-colors ${
-                                              (sample.custom_tags || []).includes(tag)
-                                                ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-                                                : 'bg-white text-gray-600 border-gray-300 hover:border-[#5a8a5e] hover:text-[#5a8a5e]'
-                                            }`}
-                                          >
-                                            {tag}
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              )}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleDeleteSample(sample.id)
+                                }}
+                                className="text-gray-400 hover:text-red-600 h-8 px-2 shrink-0"
+                              >
+                                删除
+                              </Button>
                             </div>
                           </div>
                         ))}
@@ -1146,152 +709,6 @@ export default function ChannelsPage() {
                     )}
                   </CardContent>
                 </Card>
-                
-                {/* 风格 DNA 看板 */}
-                {channelDetails.style_profile && (
-                  <Card className="border-gray-200 bg-gradient-to-br from-gray-50 to-white">
-                    <CardHeader className="pb-3">
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <CardTitle className="text-base flex items-center gap-2">
-                            <span>🧬</span>
-                            风格 DNA
-                          </CardTitle>
-                          <CardDescription>
-                            基于 {styleSamples.length} 篇样文自动生成的风格画像
-                          </CardDescription>
-                        </div>
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={handleReanalyzeStyle}
-                          disabled={analyzing || styleSamples.length === 0}
-                        >
-                          {analyzing ? '分析中...' : '重新分析'}
-                        </Button>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      {/* 风格画像 - 一句话概括 */}
-                      {channelDetails.style_profile.style_portrait && (
-                        <div className="bg-[#3a5e98]/5 border border-[#3a5e98]/20 rounded-lg p-4">
-                          <p className="text-sm font-medium text-[#3a5e98] mb-1">📝 风格画像</p>
-                          <p className="text-gray-800 leading-relaxed">
-                            "{channelDetails.style_profile.style_portrait}"
-                          </p>
-                        </div>
-                      )}
-                      
-                      {/* 结构逻辑 + 语气特征 */}
-                      <div className="grid grid-cols-2 gap-4">
-                        {/* 结构逻辑 */}
-                        {channelDetails.style_profile.structural_logic && (
-                          <div className="bg-gray-50 rounded-lg p-4">
-                            <p className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-1">
-                              🔗 结构逻辑
-                            </p>
-                            <div className="flex flex-wrap items-center gap-1">
-                              {channelDetails.style_profile.structural_logic.map((item: string, index: number) => (
-                                <span key={index} className="flex items-center">
-                                  <span className="text-xs bg-white border border-gray-200 px-2 py-1 rounded">
-                                    {item}
-                                  </span>
-                                  {index < channelDetails.style_profile.structural_logic.length - 1 && (
-                                    <span className="text-gray-400 mx-1">→</span>
-                                  )}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                        
-                        {/* 语气特征 */}
-                        {channelDetails.style_profile.tone_features && (
-                          <div className="bg-gray-50 rounded-lg p-4">
-                            <p className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-1">
-                              💬 语气特征
-                            </p>
-                            <div className="flex flex-wrap gap-2">
-                              {channelDetails.style_profile.tone_features.map((feature: string, index: number) => (
-                                <Badge 
-                                  key={index} 
-                                  variant="secondary" 
-                                  className="bg-[#3a5e98]/10 text-[#3a5e98] border-0"
-                                >
-                                  {feature}
-                                </Badge>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      
-                      {/* 六维度详解 */}
-                      {channelDetails.style_profile.dimensions && (
-                        <div className="bg-gray-50 rounded-lg p-4">
-                          <p className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-1">
-                            📊 六维度详解
-                          </p>
-                          <div className="grid grid-cols-2 gap-3 text-xs">
-                            {channelDetails.style_profile.dimensions.opening_style && (
-                              <div className="flex items-start gap-2">
-                                <span className="text-gray-500 whitespace-nowrap">开头习惯:</span>
-                                <span className="text-gray-700">{channelDetails.style_profile.dimensions.opening_style.description}</span>
-                              </div>
-                            )}
-                            {channelDetails.style_profile.dimensions.sentence_pattern && (
-                              <div className="flex items-start gap-2">
-                                <span className="text-gray-500 whitespace-nowrap">句式特征:</span>
-                                <span className="text-gray-700">{channelDetails.style_profile.dimensions.sentence_pattern.description}</span>
-                              </div>
-                            )}
-                            {channelDetails.style_profile.dimensions.paragraph_rhythm && (
-                              <div className="flex items-start gap-2">
-                                <span className="text-gray-500 whitespace-nowrap">段落节奏:</span>
-                                <span className="text-gray-700">{channelDetails.style_profile.dimensions.paragraph_rhythm.description}</span>
-                              </div>
-                            )}
-                            {channelDetails.style_profile.dimensions.expressions && (
-                              <div className="flex items-start gap-2">
-                                <span className="text-gray-500 whitespace-nowrap">常用表达:</span>
-                                <span className="text-gray-700">
-                                  {channelDetails.style_profile.dimensions.expressions.high_freq_words?.slice(0, 5).join('、')}
-                                </span>
-                              </div>
-                            )}
-                            {channelDetails.style_profile.dimensions.tone && (
-                              <div className="flex items-start gap-2">
-                                <span className="text-gray-500 whitespace-nowrap">语气特点:</span>
-                                <span className="text-gray-700">{channelDetails.style_profile.dimensions.tone.description}</span>
-                              </div>
-                            )}
-                            {channelDetails.style_profile.dimensions.ending_style && (
-                              <div className="flex items-start gap-2">
-                                <span className="text-gray-500 whitespace-nowrap">结尾风格:</span>
-                                <span className="text-gray-700">{channelDetails.style_profile.dimensions.ending_style.description}</span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                      
-                      {/* 创作指南 */}
-                      {channelDetails.style_profile.writing_guidelines && (
-                        <div className="border-t border-gray-200 pt-3">
-                          <p className="text-xs text-gray-500 mb-2">✏️ 创作指南</p>
-                          <div className="flex flex-wrap gap-2">
-                            {channelDetails.style_profile.writing_guidelines.map((guide: string, index: number) => (
-                              <span key={index} className="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">
-                                {guide}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </CardContent>
-                  </Card>
-                )}
-                
                 
                 {/* 基本信息 */}
                 <Card className="border-gray-200">
@@ -1312,18 +729,7 @@ export default function ChannelsPage() {
                       </Button>
                     </div>
                   </CardHeader>
-                  <CardContent className="pt-0">
-                    <div className="grid grid-cols-2 gap-6 text-sm">
-                      <div>
-                        <span className="text-xs text-gray-500 font-medium">目标读者</span>
-                        <p className="mt-1.5 text-gray-900 leading-relaxed">{channelDetails.target_audience}</p>
-                      </div>
-                      <div>
-                        <span className="text-xs text-gray-500 font-medium">品牌人格</span>
-                        <p className="mt-1.5 text-gray-900 leading-relaxed">{channelDetails.brand_personality}</p>
-                      </div>
-                    </div>
-                  </CardContent>
+                  
                 </Card>
                 
                 {/* AI写作人格 */}
@@ -1333,6 +739,14 @@ export default function ChannelsPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-4">
+                    {channelDetails.target_audience && (
+                      <div className="bg-gray-50 rounded-lg p-4">
+                        <p className="text-sm font-medium text-gray-700 mb-2">目标读者</p>
+                        <p className="text-gray-600 text-sm leading-relaxed">
+                          {channelDetails.target_audience}
+                        </p>
+                      </div>
+                    )}
                     <div className="bg-gray-50 rounded-lg p-4">
                       <p className="text-sm font-medium text-gray-700 mb-2">角色定位</p>
                       <p className="text-gray-600 text-sm leading-relaxed">
@@ -1389,38 +803,21 @@ export default function ChannelsPage() {
                   </CardContent>
                 </Card>
                 
-                {/* 屏蔽词和素材标签 */}
-                <div className="grid grid-cols-2 gap-4">
-                  <Card className="border-gray-200">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-base">频道屏蔽词</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                  <div className="flex flex-wrap gap-2">
-                        {channelDetails.blocked_phrases?.map((phrase: string, index: number) => (
-                          <Badge key={index} variant="secondary" className="bg-gray-100 text-gray-700">
-                        {phrase}
-                          </Badge>
-                    ))}
-                  </div>
-                    </CardContent>
-                  </Card>
-                
-                  <Card className="border-gray-200">
-                    <CardHeader className="pb-3">
-                      <CardTitle className="text-base">素材标签</CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                  <div className="flex flex-wrap gap-2">
-                        {channelDetails.material_tags?.map((tag: string, index: number) => (
-                          <Badge key={index} variant="secondary" className="bg-gray-100 text-gray-700">
-                        {tag}
-                          </Badge>
-                    ))}
-                  </div>
-                    </CardContent>
-                  </Card>
-                </div>
+                {/* 频道屏蔽词 */}
+                <Card className="border-gray-200">
+                  <CardHeader className="pb-3">
+                    <CardTitle className="text-base">频道屏蔽词</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex flex-wrap gap-2">
+                      {channelDetails.blocked_phrases?.map((phrase: string, index: number) => (
+                        <Badge key={index} variant="secondary" className="bg-gray-100 text-gray-700">
+                          {phrase}
+                        </Badge>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
                 
               </div>
             )}
@@ -1480,38 +877,26 @@ export default function ChannelsPage() {
                 />
               </div>
               
-              {/* 目标读者 + 品牌人格 并排 */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs text-gray-500 font-normal">目标读者</Label>
-                  <AutoResizeTextarea
-                    minRows={2}
-                    maxRows={4}
-                    value={editChannel.target_audience}
-                    onChange={(e) => setEditChannel({ ...editChannel, target_audience: e.target.value })}
-                    placeholder="如：7-12岁小学生家长，希望培养孩子深度阅读习惯"
-                    className="mt-1.5"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500 font-normal">品牌人格</Label>
-                  <AutoResizeTextarea
-                    minRows={2}
-                    maxRows={4}
-                    value={editChannel.brand_personality}
-                    onChange={(e) => setEditChannel({ ...editChannel, brand_personality: e.target.value })}
-                    placeholder="如：资深阅读推广人，温暖而专业"
-                    className="mt-1.5"
-                  />
-                </div>
-              </div>
             </div>
             
-            {/* ========== 2. 创作策略 ========== */}
+            {/* ========== 2. AI 写作人格 ========== */}
             <div className="mb-6">
               <div className="flex items-center gap-2 mb-4">
-                <span className="text-sm font-semibold text-gray-700">2. 创作策略</span>
+                <span className="text-sm font-semibold text-gray-700">2. AI 写作人格</span>
                 <div className="flex-1 h-px bg-gray-200" />
+              </div>
+              
+              {/* 目标读者 */}
+              <div className="mb-5">
+                <Label className="text-xs text-gray-500 font-normal">目标读者</Label>
+                <AutoResizeTextarea
+                  minRows={2}
+                  maxRows={4}
+                  value={editChannel.target_audience}
+                  onChange={(e) => setEditChannel({ ...editChannel, target_audience: e.target.value })}
+                  placeholder="如：7-12岁小学生家长，希望培养孩子深度阅读习惯"
+                  className="mt-1.5"
+                />
               </div>
               
               {/* AI 角色定位 */}
@@ -1583,28 +968,16 @@ export default function ChannelsPage() {
                 </div>
               </div>
               
-              {/* 屏蔽词 + 素材标签 并排 - 使用 TagInput */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs text-gray-500 font-normal">频道屏蔽词</Label>
-                  <p className="text-[10px] text-gray-400 mt-0.5 mb-1.5">输入后按回车添加，支持逗号分隔批量粘贴</p>
-                  <TagInput
-                    value={editChannel.blocked_phrases}
-                    onChange={(tags) => setEditChannel({ ...editChannel, blocked_phrases: tags })}
-                    placeholder="输入屏蔽词..."
-                    variant="gray"
-                  />
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500 font-normal">素材标签</Label>
-                  <p className="text-[10px] text-gray-400 mt-0.5 mb-1.5">用于关联素材库中的相关内容</p>
-                  <TagInput
-                    value={editChannel.material_tags}
-                    onChange={(tags) => setEditChannel({ ...editChannel, material_tags: tags })}
-                    placeholder="输入素材标签..."
-                    variant="blue"
-                  />
-                </div>
+              {/* 频道屏蔽词 */}
+              <div>
+                <Label className="text-xs text-gray-500 font-normal">频道屏蔽词</Label>
+                <p className="text-[10px] text-gray-400 mt-0.5 mb-1.5">输入后按回车添加，支持逗号分隔批量粘贴</p>
+                <TagInput
+                  value={editChannel.blocked_phrases}
+                  onChange={(tags) => setEditChannel({ ...editChannel, blocked_phrases: tags })}
+                  placeholder="输入屏蔽词..."
+                  variant="gray"
+                />
               </div>
             </div>
           </div>
@@ -1630,142 +1003,15 @@ export default function ChannelsPage() {
           {viewingSample && (
             <>
               <DialogHeader>
-                <DialogTitle className="flex items-center gap-2">
-                  {viewingSample.title}
-                  {viewingSample.features && (
-                    <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">
-                      已分析
-                    </span>
-                  )}
-                </DialogTitle>
+                <DialogTitle>{viewingSample.title}</DialogTitle>
                 <DialogDescription>
                   {viewingSample.source && `来源: ${viewingSample.source}`}
                   {' · '}{viewingSample.content?.length || 0} 字
                 </DialogDescription>
               </DialogHeader>
               
-              {/* 6 维特征展示 */}
-              {viewingSample.features && (
-                <div className="mt-4 p-4 bg-gradient-to-br from-[#3a5e98]/5 to-white rounded-lg border border-[#3a5e98]/20">
-                  <h4 className="text-sm font-semibold text-[#3a5e98] mb-3">
-                    6 维特征分析
-                  </h4>
-                  <div className="grid grid-cols-2 gap-3">
-                    {/* 开头习惯 */}
-                    {viewingSample.features.opening_style && (
-                      <div className="bg-white p-3 rounded-lg border border-gray-100">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-xs text-gray-500">开头习惯</span>
-                          <Badge variant="secondary" className="text-xs bg-gray-100">
-                            {viewingSample.features.opening_style.type === 'story_intro' ? '故事引入' :
-                             viewingSample.features.opening_style.type === 'direct' ? '开门见山' :
-                             viewingSample.features.opening_style.type === 'question' ? '设问开场' :
-                             viewingSample.features.opening_style.type === 'scene' ? '场景描写' :
-                             viewingSample.features.opening_style.type}
-                          </Badge>
-                        </div>
-                        <p className="text-xs text-gray-700">{viewingSample.features.opening_style.description}</p>
-                        {viewingSample.features.opening_style.example && (
-                          <p className="text-xs text-gray-500 mt-1 italic">
-                            "{viewingSample.features.opening_style.example.slice(0, 50)}..."
-                          </p>
-                        )}
-                      </div>
-                    )}
-                    
-                    {/* 句式特征 */}
-                    {viewingSample.features.sentence_pattern && (
-                      <div className="bg-white p-3 rounded-lg border border-gray-100">
-                        <p className="text-xs text-gray-500 mb-1">句式特征</p>
-                        <p className="text-xs text-gray-700">{viewingSample.features.sentence_pattern.description}</p>
-                        <div className="flex gap-2 mt-1">
-                          {viewingSample.features.sentence_pattern.avg_length && (
-                            <span className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">
-                              均长 {viewingSample.features.sentence_pattern.avg_length} 字
-                            </span>
-                          )}
-                          {viewingSample.features.sentence_pattern.favorite_punctuation?.map((p: string, i: number) => (
-                            <span key={i} className="text-xs bg-gray-100 px-1.5 py-0.5 rounded">{p}</span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* 段落节奏 */}
-                    {viewingSample.features.paragraph_rhythm && (
-                      <div className="bg-white p-3 rounded-lg border border-gray-100">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-xs text-gray-500">段落节奏</span>
-                          <Badge variant="secondary" className="text-xs bg-gray-100">
-                            {viewingSample.features.paragraph_rhythm.variation === 'low' ? '变化较少' :
-                             viewingSample.features.paragraph_rhythm.variation === 'medium' ? '变化适中' :
-                             viewingSample.features.paragraph_rhythm.variation === 'high' ? '变化丰富' :
-                             viewingSample.features.paragraph_rhythm.variation}
-                          </Badge>
-                        </div>
-                        <p className="text-xs text-gray-700">{viewingSample.features.paragraph_rhythm.description}</p>
-                      </div>
-                    )}
-                    
-                    {/* 语气特点 */}
-                    {viewingSample.features.tone && (
-                      <div className="bg-white p-3 rounded-lg border border-gray-100">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-xs text-gray-500">语气特点</span>
-                          <Badge variant="secondary" className="text-xs bg-[#3a5e98]/10 text-[#3a5e98]">
-                            {viewingSample.features.tone.type === 'warm_friend' ? '温润亲切' :
-                             viewingSample.features.tone.type === 'professional' ? '专业权威' :
-                             viewingSample.features.tone.type === 'literary' ? '文学气质' :
-                             viewingSample.features.tone.type === 'conversational' ? '对话感' :
-                             viewingSample.features.tone.type}
-                          </Badge>
-                        </div>
-                        <p className="text-xs text-gray-700">{viewingSample.features.tone.description}</p>
-                        {viewingSample.features.tone.formality !== undefined && (
-                          <span className="text-xs text-gray-500">正式度: {viewingSample.features.tone.formality}</span>
-                        )}
-                      </div>
-                    )}
-                    
-                    {/* 结尾风格 */}
-                    {viewingSample.features.ending_style && (
-                      <div className="bg-white p-3 rounded-lg border border-gray-100">
-                        <div className="flex items-center gap-2 mb-1">
-                          <span className="text-xs text-gray-500">结尾风格</span>
-                          <Badge variant="secondary" className="text-xs bg-gray-100">
-                            {viewingSample.features.ending_style.type === 'reflection' ? '引导思考' :
-                             viewingSample.features.ending_style.type === 'question' ? '提问收尾' :
-                             viewingSample.features.ending_style.type === 'emotional' ? '情感升华' :
-                             viewingSample.features.ending_style.type === 'practical' ? '实用总结' :
-                             viewingSample.features.ending_style.type}
-                          </Badge>
-                        </div>
-                        <p className="text-xs text-gray-700">{viewingSample.features.ending_style.description}</p>
-                      </div>
-                    )}
-                    
-                    {/* 常用表达 */}
-                    {viewingSample.features.expressions && (
-                      <div className="bg-white p-3 rounded-lg border border-gray-100">
-                        <p className="text-xs text-gray-500 mb-1">常用表达</p>
-                        <div className="flex flex-wrap gap-1">
-                          {viewingSample.features.expressions.high_freq_words?.map((word: string, i: number) => (
-                            <span key={i} className="text-xs bg-gray-100 text-gray-700 px-1.5 py-0.5 rounded">{word}</span>
-                          ))}
-                          {viewingSample.features.expressions.transition_phrases?.map((word: string, i: number) => (
-                            <span key={i} className="text-xs bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded">{word}</span>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-              
-              {/* 原文内容 */}
               <div className="mt-4">
-                <h4 className="text-sm font-medium text-gray-700 mb-2">原文内容</h4>
-                <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 max-h-[40vh] overflow-y-auto">
+                <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 max-h-[50vh] overflow-y-auto">
                   <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
                     {viewingSample.content}
                   </p>

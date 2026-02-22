@@ -10,6 +10,7 @@ from .ai_service import ai_service
 from .db_service import db_service
 from .material_processor import process_materials, classify_materials
 from .search_service import search_service
+from .knowledge_service import knowledge_service
 
 class WorkflowEngine:
     """工作流执行引擎"""
@@ -85,6 +86,36 @@ class WorkflowEngine:
             "style_profile": channel_data.get("style_profile", None)
         }
     
+    def _build_channel_rules_prompt(self, channel_config: Dict[str, Any]) -> str:
+        """
+        组装【频道专属内容铁律】prompt 片段。
+        
+        根据 channel_config 中的 must_do / must_not_do 规则动态生成，
+        任一字段为空则自动跳过对应段落，两者均为空返回空字符串。
+        """
+        rules = channel_config.get('channel_specific_rules', {})
+        must_do = rules.get('must_do', [])
+        must_not_do = rules.get('must_not_do', [])
+
+        if not must_do and not must_not_do:
+            return ""
+
+        parts = ["## 【频道专属内容铁律】"]
+
+        if must_do:
+            parts.append("你在创作/审校时，必须严格遵守以下原则：")
+            for rule in must_do:
+                parts.append(f"- ✅ {rule}")
+            parts.append("")
+
+        if must_not_do:
+            parts.append("你绝对禁止出现以下情况：")
+            for rule in must_not_do:
+                parts.append(f"- ❌ {rule}")
+            parts.append("")
+
+        return "\n".join(parts)
+
     def sync_channel_config_to_json(self, channel_id: str) -> bool:
         """
         将数据库中的频道配置同步到 JSON 文件
@@ -137,7 +168,7 @@ class WorkflowEngine:
     def load_writing_constraints(self) -> Dict[str, Any]:
         """
         加载全局写作约束配置
-        包含：禁用书目、字数限制、风格 DNA 合格线等
+        包含：禁用书目、字数限制、句段长度等全局写作约束
         """
         config_file = self.configs_dir / "global" / "writing_constraints.json"
         if config_file.exists():
@@ -152,8 +183,7 @@ class WorkflowEngine:
                 },
                 "word_count": {"default": 1500, "tolerance": 0.1},
                 "sentence": {"max_length": 40},
-                "paragraph": {"max_length": 200},
-                "style_dna": {"pass_threshold": 0.8}
+                "paragraph": {"max_length": 200}
             }
     
     def load_blocked_words(self) -> Dict[str, Any]:
@@ -280,16 +310,98 @@ class WorkflowEngine:
         think_aloud += f"  - 识别调研主题: {topic_keywords}\n"
         
         # ====================================================================
-        # 阶段零：真实网络搜索（如果 Tavily API 可用）
+        # 阶段零-A：内部知识库 RAG 检索（优先于外部搜索）
+        # ====================================================================
+        internal_knowledge = ""
+        internal_sources = []  # 内部来源（Tavily 兼容格式）
+        channel_scope = channel_id if channel_id in ("deep_reading", "picture_books") else ""
+        
+        if channel_scope and knowledge_service.is_available():
+            think_aloud += "  - 📚 正在检索内部知识库...\n"
+            
+            # 分步调用：获取原始 chunks 以提取来源文件名
+            rag_chunks = knowledge_service.search_docs(topic_keywords, channel_scope, limit=5)
+            rag_books = []
+            if channel_scope == "deep_reading":
+                rag_books = knowledge_service.search_books(topic_keywords, limit=3)
+            
+            internal_knowledge = knowledge_service.format_knowledge_for_prompt(rag_chunks, rag_books)
+            
+            if rag_chunks or rag_books:
+                # 提取唯一来源文件名，格式化为 Tavily 兼容的 source 字典
+                seen_filenames = set()
+                for chunk in rag_chunks:
+                    fname = chunk.get("source_filename", "")
+                    if fname and fname not in seen_filenames:
+                        seen_filenames.add(fname)
+                        snippet = chunk.get("content", "")[:100] + "..."
+                        internal_sources.append({
+                            "title": fname,
+                            "url": "internal_database",
+                            "content": snippet
+                        })
+                for book in rag_books:
+                    book_title = f"《{book.get('title', '')}》"
+                    if book_title not in seen_filenames:
+                        seen_filenames.add(book_title)
+                        internal_sources.append({
+                            "title": f"课标推荐 - {book_title}",
+                            "url": "internal_database",
+                            "content": book.get("content_intro", "")[:100] + "..."
+                        })
+                
+                think_aloud += f"  - ✓ 内部知识库命中 {len(rag_chunks)} 条文档 + {len(rag_books)} 本书目，提取 {len(internal_sources)} 个来源\n"
+            else:
+                think_aloud += "  - ⚠ 内部知识库无匹配结果\n"
+        elif not channel_scope:
+            think_aloud += "  - ℹ 当前频道无内部知识库覆盖，跳过 RAG 检索\n"
+        else:
+            think_aloud += "  - ⚠ RAG 检索服务未就绪（OPENAI_API_KEY 未配置）\n"
+        
+        # ====================================================================
+        # 阶段零-B：Query Rewriting + 真实网络搜索
         # ====================================================================
         search_context = ""
         knowledge_sources = []
         
         if search_service.is_available():
+            # Query Rewriting：将用户主题转化为精准搜索关键词
+            search_query = topic_keywords  # Fallback 默认值
+            try:
+                think_aloud += "  - 🔄 正在优化搜索关键词...\n"
+                rewrite_result = await ai_service.generate_content(
+                    system_prompt="""你是一位儿童阅读教育领域的学术研究员，正在为一篇教育类文章构建精准的学术数据库检索词。
+
+【你的唯一任务】
+从用户描述中提取 1–2 组纯粹的【教育学实体 / 心理学名词 / 具体的阅读方法与策略】，用于在 Google Scholar 或教育学数据库中检索真实研究资料。
+
+【绝对禁止出现以下动作指令词】
+需求分析、怎么写、公众号、排版、字数、生成、总结、分析、文章、写作技巧、SEO、关键词优化
+
+【检索词的正确形态示例】
+- "二年级 漫画书 纯文字过渡 阅读策略"
+- "儿童阅读理解 元认知 朗读训练"
+- "小学生注意力 整本书阅读 专注力培养"
+
+【输出规则】
+仅输出关键词本身，以逗号分隔，不加任何解释或标点。""",
+                    user_message=f"请根据以下创作主题，提取适合学术检索的儿童教育关键词：\n\n{topic_keywords}",
+                    temperature=0.2,
+                    max_tokens=100
+                )
+                rewritten = rewrite_result.strip()
+                if rewritten and len(rewritten) < 200:
+                    search_query = rewritten
+                    think_aloud += f"  - ✓ 关键词优化: {search_query}\n"
+                else:
+                    think_aloud += f"  - ⚠ 关键词优化结果异常，使用原始主题\n"
+            except Exception as e:
+                think_aloud += f"  - ⚠ 关键词优化失败({e})，使用原始主题\n"
+            
             think_aloud += "  - 🌐 正在进行网络搜索...\n"
             
             search_result = await search_service.search_for_research(
-                topic=topic_keywords,
+                topic=search_query,
                 context=brief_analysis
             )
             
@@ -302,6 +414,10 @@ class WorkflowEngine:
         else:
             think_aloud += "  - ⚠ 搜索服务未配置（TAVILY_API_KEY），使用 AI 知识库\n"
         
+        # 将内部来源插入 knowledge_sources 最前面（优先展示于外部搜索结果之前）
+        if internal_sources:
+            knowledge_sources = internal_sources + knowledge_sources
+        
         # ====================================================================
         # 阶段一：生成详尽调研资料
         # ====================================================================
@@ -311,8 +427,9 @@ class WorkflowEngine:
 
 ## 重要要求
 1. **必须基于搜索结果**：只使用搜索结果中的信息，不要编造
-2. **标注来源**：在关键信息后标注来源编号，如 [来源1]
-3. **结构清晰**：按主题分类整理
+2. **标注来源**：在正文中引用参考资料时，请**统一且仅使用** `[来源X]` 的格式进行标注（X对应底部来源列表的序号）。无论该资料是内部知识库还是外部网络结果，都只使用数字序号引用。**严禁**在正文中使用诸如 `[老约翰内部知识库]` 等笼统的文本标签
+3. **充分利用补充资料**：如果提供了【补充参考资料】，将其与搜索结果同等对待，统一编号引用
+4. **结构清晰**：按主题分类整理
 
 ## 输出格式（Markdown）
 
@@ -342,17 +459,21 @@ class WorkflowEngine:
 
 【真实搜索结果】
 {search_context}
-
-请基于以上搜索结果，生成结构化的调研报告。"""
+{f'''
+【补充参考资料】
+{internal_knowledge}
+''' if internal_knowledge else ''}
+请基于以上全部参考资料生成结构化的调研报告。"""
         else:
             # 无搜索结果，使用传统方式
             research_prompt = """你是一位资深的内容调研专家。请根据创作需求，进行全面深入的资料调研。
 
 ## 调研要求
 1. **信息全面**：覆盖主题的各个关键维度
-2. **有据可查**：标注信息来源类型（学术研究/官方数据/专家观点/案例实证）
-3. **实用导向**：聚焦对创作有实际价值的信息
-4. **结构清晰**：分类整理，便于后续引用
+2. **有据可查**：在正文中引用参考资料时，请**统一且仅使用** `[来源X]` 的格式进行标注（X对应底部来源列表的序号）。无论该资料是内部知识库还是外部网络结果，都只使用数字序号引用。**严禁**在正文中使用诸如 `[老约翰内部知识库]` 等笼统的文本标签
+3. **充分利用补充资料**：如果提供了【补充参考资料】，将其与其他参考同等对待，统一编号引用
+4. **实用导向**：聚焦对创作有实际价值的信息
+5. **结构清晰**：分类整理，便于后续引用
 
 ## 输出格式（Markdown）
 
@@ -377,7 +498,10 @@ class WorkflowEngine:
 ---
 请确保内容详实、有深度，为后续创作提供充足的素材支撑。"""
             
-            user_message = f"请根据以下需求分析进行深度调研：\n\n{brief_analysis}"
+            internal_ref = ""
+            if internal_knowledge:
+                internal_ref = f"\n\n【补充参考资料】\n{internal_knowledge}"
+            user_message = f"请根据以下需求分析进行深度调研：\n\n{brief_analysis}{internal_ref}"
         
         think_aloud += "  - 正在生成详尽调研资料...\n"
         
@@ -399,12 +523,15 @@ class WorkflowEngine:
 - 总字数：200-300字
 - 要点数：3-5个核心发现
 - 格式：纯文本，禁止使用任何 Markdown 或 HTML 标签
+- 引用来源时统一使用 [来源X] 格式（X为序号），严禁使用 [老约翰内部知识库] 等文本标签
 
 【输出格式示例】
 核心发现：
-1. 第一个要点的一句话概括
-2. 第二个要点的一句话概括
+1. 第一个要点的一句话概括 [来源1]
+2. 第二个要点的一句话概括 [来源3]
 3. 第三个要点的一句话概括
+
+参考来源：[来源1] xxx, [来源2] xxx, [来源3] xxx
 
 创作建议：一句话说明这些发现对文章创作的指导意义。
 
@@ -412,6 +539,7 @@ class WorkflowEngine:
 - 不要使用 # ## ### 等标题符号
 - 不要使用 ** __ 等加粗符号
 - 不要使用 <strong> <b> 等 HTML 标签
+- 不要使用 [老约翰内部知识库] 等笼统标签引用来源
 - 直接输出纯文本即可"""
         
         think_aloud += "  - 正在提炼核心要点摘要...\n"
@@ -430,6 +558,7 @@ class WorkflowEngine:
             "output": knowledge_base,           # 完整调研资料
             "knowledge_summary": knowledge_summary,  # 核心要点摘要
             "knowledge_sources": knowledge_sources,  # 真实搜索来源
+            "internal_knowledge": internal_knowledge,  # RAG 内部知识库参考
             "think_aloud": think_aloud,
             "is_checkpoint": True  # 设为卡点，需用户确认
         }
@@ -481,35 +610,98 @@ class WorkflowEngine:
             "is_checkpoint": True  # 卡点，需要用户确认
         }
     
-    async def execute_step_4(self, selected_topic: str) -> Dict[str, Any]:
+    async def execute_step_4(
+        self,
+        selected_topic: str,
+        internal_knowledge: str = "",
+        knowledge_summary: str = "",
+    ) -> Dict[str, Any]:
         """
-        Step 4: 创建协作文档
+        Step 4: 创建协作文档（v4.5 - 知识库感知，极简用户输入）
+        
+        核心逻辑：
+        1. 先评估已有的【补充参考资料】（知识库 RAG 内容）
+        2. 资料中已包含的案例/书名/步骤 → AI 主动承担融入任务
+        3. 仅当核心论据极度缺乏时，以【可选补充】形式向用户提问
+        4. 用户需填写的内容不超过 2-3 个简短问题，可回复"无"或跳过
         """
-        system_prompt = """你是项目管理专家。根据选定的选题，创建协作清单。
+        has_knowledge = bool(internal_knowledge and internal_knowledge.strip())
+        has_summary = bool(knowledge_summary and knowledge_summary.strip())
 
-输出格式：
-## AI负责的任务
-- [ ] 任务1
-- [ ] 任务2
+        # 动态读取全局禁用书目
+        writing_constraints = self.load_writing_constraints()
+        banned_books = writing_constraints.get('banned_books', {})
+        banned_books_list = '、'.join(banned_books.get('list', []))
 
-## 用户需要提供的内容
-- [ ] 真实案例：xxx
-- [ ] 个人观点：xxx
-- [ ] 数据支持：xxx
+        system_prompt = f"""你是一位写作项目的分工规划师，正在为人类运营规划 AI 与人的写作分工。
 
-## 注意事项
-- 不编造数据
-- 不使用套话
+## 核心原则
+你的首要目标是**最大限度降低用户的输入负担**。AI 能自行解决的绝不麻烦用户。
+
+## 【最高红线】
+在构思案例和撰写文章时，**绝对禁止**引用以下过度泛滥的童书作为案例：{banned_books_list}。你必须优先使用 Step 2 检索到的知识库中的具体教案书目！如果违反此红线，你的输出将被直接废弃。
+
+## 工作流程
+1. **首先评估已有资料**：仔细阅读下方提供的【补充参考资料】和【调研摘要】。
+2. **判断素材充足度**：
+   - 资料中已包含的真实案例、书籍推荐、教学步骤、课堂反馈 → AI 主动承担融入文章的任务，**不要再向用户索取**。
+   - 只有当资料中**极度缺乏**某项核心论据（例如：完全没有具体书名、完全没有目标年级的真实反馈）时，才以【可选补充】形式提问。
+3. **用户问题极度精简**：最多 2-3 个简短问题，每个问题一句话。用户可以回复"无"或直接跳过。
+
+## 输出格式（严格遵守）
+
+### ✅ AI 将负责的工作
+（根据选题和现有资料，列出 AI 承担的具体写作任务，包括如何使用已有素材）
+
+### 📝 可选补充（非必填，可在输入框中填写或留空跳过）
+（仅在资料确实缺乏关键内容时才列出，最多 2-3 个简短问题）
+（如果资料已经足够充分，此区域写"资料充分，无需额外补充，可直接点击「下一步」。"）
+
+### ⚠️ 写作纪律
+- 所有案例必须来自已有参考资料，严禁凭空编造
+- 如果用户未补充内容，AI 将完全基于现有资料完成创作
 """
-        
-        think_aloud = "📝 正在生成协作清单..."
-        
+
+        # 构建 user_message，注入知识库上下文
+        knowledge_block = ""
+        if has_knowledge:
+            knowledge_block += f"""
+## 【补充参考资料】（来自知识库）
+{internal_knowledge}
+
+"""
+        if has_summary:
+            knowledge_block += f"""## 【调研摘要】（来自 Step 2）
+{knowledge_summary}
+
+"""
+
+        if not knowledge_block.strip():
+            knowledge_block = "\n（暂无补充参考资料，AI 需基于选题方向自行规划）\n\n"
+
+        user_message = f"""请为以下选题创建协作文档。
+
+## 选题
+{selected_topic}
+
+{knowledge_block}请根据上述资料的充足程度，输出协作文档。记住：已有资料能覆盖的内容，AI 全部承担；只有极度缺乏时才向用户提问。
+
+**请在下方输入框中补充上述信息。如果无需补充，请直接点击界面的「下一步」按钮，我将开始为您撰写初稿。**"""
+
+        think_aloud = "📝 正在评估现有资料并生成协作文档...\n"
+        if has_knowledge:
+            think_aloud += f"  - 已注入补充参考资料（{len(internal_knowledge)} 字）\n"
+        if has_summary:
+            think_aloud += f"  - 已注入调研摘要（{len(knowledge_summary)} 字）\n"
+        if not has_knowledge and not has_summary:
+            think_aloud += "  - 暂无参考资料，协作文档将以通用模式生成\n"
+
         result = await ai_service.generate_content(
             system_prompt=system_prompt,
-            user_message=f"为以下选题创建协作清单：\n\n{selected_topic}",
+            user_message=user_message,
             temperature=0.3
         )
-        
+
         return {
             "output": result,
             "think_aloud": think_aloud
@@ -522,280 +714,55 @@ class WorkflowEngine:
         task_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Step 5: 风格建模与素材检索 (v3.5 - 样文矩阵模式)
+        Step 5: 风格建模（v4.5 极简模式）
         
-        核心变化：
-        1. 切换为"样文矩阵"模式，每篇样文独立保持 6 维特征
-        2. 智能推荐最匹配的单篇样文（基于 custom_tags + Brief 关键词）
-        3. 主编可在前端选择/切换参考样文
-        4. Step 7 将使用所选样文的独立 style_profile
+        降维重构：
+        - 不再进行 6 维特征分析或智能匹配
+        - 仅展示当前频道可用样文数量
+        - Step 7 将随机抽取 1-2 篇样文的原文作为排版与语气参考
         """
         channel_config = self.load_channel_config(channel_id)
         
-        think_aloud = "[Step 5] 开始风格建模与素材检索 (样文矩阵模式)...\n"
+        think_aloud = "[Step 5] 开始风格建模 (极简模式)...\n"
         
-        # 获取频道数据
         channel_data = db_service.get_channel_by_slug(channel_id)
         
-        # ====================================================================
-        # 1. 样文矩阵：获取所有已分析的样文，智能推荐最匹配的一篇
-        # ====================================================================
-        think_aloud += "\n[样文矩阵] 正在加载样文库...\n"
-        
-        style_profile = None
-        selected_sample = None
+        # 统计频道可用样文
         all_samples = []
-        
-        # v3.5: 从独立表获取样文
         if channel_data:
-            # 提取关键词用于匹配
-            keywords = self._extract_keywords(selected_topic)
-            think_aloud += f"  - 选题关键词: {', '.join(keywords[:5])}\n"
-            
-            # 获取样文并计算匹配分数
-            all_samples = db_service.get_style_samples_for_matching(
-                channel_id=channel_data['id'],
-                keywords=keywords
-            )
-            
-            if all_samples:
-                think_aloud += f"  - ✓ 找到 {len(all_samples)} 篇已分析的样文\n"
-                
-                # 推荐匹配度最高的样文
-                selected_sample = all_samples[0]
-                matched_tags = selected_sample.get('matched_tags', [])
-                
-                think_aloud += f"\n[智能推荐] 最佳匹配样文：《{selected_sample['title']}》\n"
-                if matched_tags:
-                    think_aloud += f"  - 匹配标签: {', '.join(matched_tags)}\n"
-                think_aloud += f"  - 匹配分数: {selected_sample.get('match_score', 0)}\n"
-                
-                # 使用推荐样文的 style_profile 作为默认
-                style_profile = selected_sample.get('style_profile', {})
-                
-                # 展示该样文的 6 维特征摘要
-                if style_profile:
-                    dims = style_profile
-                    think_aloud += "  - 6 维特征:\n"
-                    if dims.get('opening_style'):
-                        think_aloud += f"    · 开头: {dims['opening_style'].get('type', '-')}\n"
-                    if dims.get('tone'):
-                        think_aloud += f"    · 语气: {dims['tone'].get('type', '-')}\n"
-                    if dims.get('ending_style'):
-                        think_aloud += f"    · 结尾: {dims['ending_style'].get('type', '-')}\n"
-            else:
-                think_aloud += "  - ⚠ 该频道暂无已分析的样文\n"
+            all_samples = db_service.get_style_samples_by_channel(channel_data['id'])
         
-        # 回退：如果没有独立表样文，尝试从旧 JSONB 字段获取
-        if not style_profile:
-            style_samples = channel_data.get('style_samples', []) if channel_data else []
-            
-            if channel_data and channel_data.get('style_profile'):
-                style_profile = channel_data['style_profile']
-                think_aloud += f"  - 回退到频道整体风格画像\n"
-            elif style_samples:
-                # 使用第一篇样文的特征
-                for sample in style_samples:
-                    if sample.get('features'):
-                        style_profile = sample['features']
-                        think_aloud += f"  - 使用样文《{sample.get('title', '无标题')}》的特征\n"
-                        break
-        
-        # 最终回退：默认风格
-        if not style_profile:
-            think_aloud += "  - ⚠ 使用默认风格配置\n"
-            style_profile = {
-                "style_portrait": "专业而亲切的内容创作者，用真诚的态度分享观点",
-                "structural_logic": ["场景切入", "问题引出", "观点展开", "案例支撑", "总结升华"],
-                "tone_features": ["真诚", "专业", "亲切"],
-                "opening_style": {"type": "story_intro", "description": "建议用生活场景引入"},
-                "tone": {"type": "warm_friend", "formality": 0.3, "description": "温润亲切，像朋友聊天"},
-                "ending_style": {"type": "reflection", "description": "引导读者思考"},
-                "writing_guidelines": ["避免说教语气", "多用短句", "融入真实经历"]
-            }
-        
-        # ====================================================================
-        # 2. 从数据库检索真实素材
-        # ====================================================================
-        think_aloud += "\n[RAG] 正在从素材库检索相关素材...\n"
-        think_aloud += f"  - 频道过滤: {channel_id}\n"
-        
-        retrieved_materials = []
-        raw_materials = []
-        
-        if channel_data:
-            keywords = self._extract_keywords(selected_topic)
-            think_aloud += f"  - 检索关键词: {', '.join(keywords)}\n"
-            
-            # 增大检索量，为去重留余量
-            raw_materials = db_service.search_materials_by_keywords(
-                channel_id=channel_data["id"],
-                keywords=keywords,
-                limit=15
-            )
-            think_aloud += f"  - 原始检索: {len(raw_materials)} 条素材\n"
-        
-        if not raw_materials and channel_data:
-            think_aloud += "  - 未找到精确匹配，获取频道通用素材...\n"
-            raw_materials = db_service.get_materials_by_channel(
-                channel_id=channel_data["id"],
-                limit=15
-            )
-        
-        # ====================================================================
-        # 2.1 素材清洗与去重
-        # ====================================================================
-        if raw_materials:
-            think_aloud += "\n[素材处理] 开始清洗与去重...\n"
-            original_count = len(raw_materials)
-            
-            # 调用素材处理器：噪声过滤 + 来源去重 + 内容去重
-            retrieved_materials = process_materials(
-                raw_materials,
-                enable_spam_filter=True,
-                enable_source_dedupe=True,
-                enable_content_dedupe=True,
-                content_similarity_threshold=0.85
-            )
-            
-            # 限制最终数量
-            retrieved_materials = retrieved_materials[:8]
-            
-            removed_count = original_count - len(retrieved_materials)
-            if removed_count > 0:
-                think_aloud += f"  - 清洗完成: {original_count} -> {len(retrieved_materials)} 条\n"
-                think_aloud += f"  - 移除 {removed_count} 条重复/营销内容\n"
-            else:
-                think_aloud += f"  - 清洗完成: {len(retrieved_materials)} 条有效素材\n"
-        
-        # ====================================================================
-        # 2.2 素材分类（长文 vs 短碎）
-        # ====================================================================
-        classified_materials = {"long": [], "short": []}
-        if retrieved_materials:
-            classified_materials = classify_materials(retrieved_materials, long_threshold=200)
-            think_aloud += f"  - 分类: {len(classified_materials['long'])} 条长文 + {len(classified_materials['short'])} 条灵感碎片\n"
-        
-        # ====================================================================
-        # 2.3 长文素材摘要化（v3.7 新增）
-        # ====================================================================
-        if classified_materials['long']:
-            think_aloud += "\n[素材摘要] 正在分析长文素材...\n"
-            summarized_long = []
-            for mat in classified_materials['long']:
-                content_len = len(mat.get('content', ''))
-                if content_len >= 500:
-                    think_aloud += f"  - 分析《{mat.get('source', '未命名')}》({content_len}字)...\n"
-                    summarized_mat = await self._summarize_material(mat, selected_topic)
-                    summarized_long.append(summarized_mat)
-                else:
-                    mat['is_summarized'] = False
-                    summarized_long.append(mat)
-            classified_materials['long'] = summarized_long
-            think_aloud += f"  - ✓ 完成 {len(summarized_long)} 条长文摘要\n"
-        
-        # ====================================================================
-        # 3. 格式化输出（优化：使用摘要而非全文）
-        # ====================================================================
-        materials_context = ""
-        if retrieved_materials:
-            materials_context = "\n\n## 从素材库检索到的真实素材\n"
-            materials_context += "（以下素材来自15年积累的真实经历，请在创作中运用这些真实案例和观点）\n\n"
-            
-            # 长文素材：使用摘要
-            if classified_materials['long']:
-                materials_context += "### 【长文素材】\n"
-                for i, mat in enumerate(classified_materials['long'], 1):
-                    source_name = mat.get('source', f"素材{i}")
-                    materials_context += f"\n**{i}. [{mat['material_type']}] {source_name}**\n"
-                    
-                    # 优先使用 AI 摘要
-                    if mat.get('ai_summary'):
-                        materials_context += f"{mat['ai_summary']}\n"
-                    elif mat.get('summary'):
-                        materials_context += f"{mat['summary']}\n"
-                    else:
-                        # 回退：截取前300字
-                        content = mat.get('content', '')
-                        materials_context += f"{content[:300]}{'...' if len(content) > 300 else ''}\n"
-                    
-                    # 显示关键要点
-                    if mat.get('key_points'):
-                        materials_context += "**关键要点**：" + " | ".join(mat['key_points']) + "\n"
-                materials_context += "\n"
-            
-            # 短碎素材：直接显示
-            if classified_materials['short']:
-                materials_context += "### 【灵感碎片】\n"
-                for mat in classified_materials['short']:
-                    materials_context += f"- [{mat['material_type']}] {mat['content']}\n"
-                materials_context += "\n"
-            
-            think_aloud += f"\n[RAG] 已处理 {len(retrieved_materials)} 条素材（{len(classified_materials['long'])} 长文 + {len(classified_materials['short'])} 碎片）\n"
+        if all_samples:
+            think_aloud += f"\n[样文库] ✓ 找到 {len(all_samples)} 篇样文\n"
+            for i, s in enumerate(all_samples, 1):
+                think_aloud += f"  {i}. 《{s['title']}》({s.get('word_count', 0)} 字)\n"
+            think_aloud += "\n→ Step 7 创作时将随机抽取 1-2 篇作为排版与语气参考\n"
         else:
-            think_aloud += "\n[WARN] 素材库中暂无相关素材，请在创作时注入真实经历\n"
+            think_aloud += "\n[样文库] ⚠ 该频道暂无样文，Step 7 将仅依赖频道基础调性\n"
         
-        # ====================================================================
-        # 4. 生成风格指导文档 (v3.5 简化，不再显示 JSON)
-        # ====================================================================
-        
-        # 构建风格摘要（去 JSON 化）
-        style_summary = ""
-        if style_profile:
-            if style_profile.get('style_portrait'):
-                style_summary += f"**风格画像**：{style_profile['style_portrait']}\n\n"
-            
-            if style_profile.get('structural_logic'):
-                logic = style_profile['structural_logic']
-                style_summary += f"**结构逻辑**：{' → '.join(logic[:5])}\n\n"
-            
-            if style_profile.get('tone_features'):
-                style_summary += f"**语气特征**：{', '.join(style_profile['tone_features'][:4])}\n\n"
-            
-            if style_profile.get('writing_guidelines'):
-                guidelines = style_profile['writing_guidelines']
-                style_summary += "**创作指南**：\n"
-                for i, g in enumerate(guidelines[:5], 1):
-                    style_summary += f"  {i}. {g}\n"
-        
-        sample_info = ""
-        if selected_sample:
-            sample_info = f"""
-## 推荐参考样文
-- **标题**：《{selected_sample['title']}》
-- **标签**：{', '.join(selected_sample.get('custom_tags', []) or ['无标签'])}
-- **匹配度**：{selected_sample.get('match_score', 0)} 分
-
-> 本次创作将参考此样文的写作范式。如需更换，请在工作台选择其他样文。
-"""
+        think_aloud += "\n[知识库] 所有参考资料（含理论文档与真实案例/微素材）均通过 RAG 知识库在 Step 7 注入。\n"
         
         style_guide = f"""## 本篇创作风格指引
 
-{style_summary}
-{sample_info}
+**可用样文**：{len(all_samples)} 篇（Step 7 将随机抽取 1-2 篇作为排版与语气参考）
 
 ## 创作要求
-1. **严格模仿所选样文的写作范式**（开头方式、句式节奏、语气特点、结尾风格）
-2. **真实素材优先**：将检索到的真实经历自然融入，禁止凭空编造案例
+1. **严格模仿参考样文的行文节奏、段落长短、语气语调**
+2. **知识库驱动**：Step 7 将自动注入 RAG 补充参考资料（含专业理论与真实案例），请自然融合
 3. **保持频道调性**：{channel_config.get('brand_personality', '温润、专业、有深度')}
-
-{materials_context}
 """
         
-        # 持久化 Think Aloud
         if task_id:
             db_service.add_think_aloud_log(task_id, 5, think_aloud)
         
         return {
             "output": style_guide,
             "think_aloud": think_aloud,
-            "retrieved_materials": retrieved_materials,
-            "classified_materials": classified_materials,
-            "style_profile": style_profile,
-            # v3.5 新增：样文推荐数据
-            "selected_sample": selected_sample,
-            "all_samples": all_samples,
-            "has_sample_recommendation": bool(selected_sample)
+            "retrieved_materials": [],
+            "style_profile": None,
+            "selected_sample": None,
+            "all_samples": [{"id": str(s["id"]), "title": s["title"]} for s in all_samples],
+            "has_sample_recommendation": False
         }
     
     def _extract_keywords(self, text: str) -> List[str]:
@@ -928,247 +895,105 @@ class WorkflowEngine:
     
     async def execute_step_6(self) -> Dict[str, Any]:
         """
-        Step 6: 挂起等待（数据确认卡点）
+        Step 6: 创作准备（自动流转，无需用户操作）
+        整合 RAG 检索事实与标杆样文特征，为 Step 7 初稿创作封装上下文。
         """
-        think_aloud = "⏸️ 挂起等待用户确认所有必需素材已就绪..."
+        think_aloud = "[系统自动流转] 真实素材与风格特征已封装完毕，直接启动初稿生成。"
         
-        result = """## 数据确认清单
-
-请确认以下内容已准备好：
-- [ ] 真实案例和经历
-- [ ] 个人观点和态度
-- [ ] 必要的数据支持
-- [ ] 其他关键信息
-
-⚠️ 重要提醒：
-- 绝不编造虚假信息
-- 宁可等待也不瞎写
-- 所有数据必须有来源
-
-确认无误后，点击"继续"进入创作阶段。
-"""
+        result = "创作上下文已自动封装，系统已整合 RAG 检索事实与标杆样文特征，无缝切入初稿创作阶段。"
         
         return {
             "output": result,
             "think_aloud": think_aloud,
-            "is_checkpoint": True  # 卡点，需要用户确认
+            "is_checkpoint": False
         }
     
     async def execute_step_7(
         self,
         selected_topic: str,
         style_guide: str,
-        materials: str,
         channel_id: str,
-        word_count: int = 1500,  # 默认字数限制
-        style_profile: Dict[str, Any] = None,  # 风格画像
-        selected_sample: Dict[str, Any] = None,  # v3.5: 所选的单一标杆样文
-        knowledge_summary: str = ""  # v3.6: Step 2 调研摘要，用于注入事实地基
+        word_count: int = 1500,
+        knowledge_summary: str = "",
+        internal_knowledge: str = "",
+        user_feedback: str = ""
     ) -> Dict[str, Any]:
         """
-        Step 7: 初稿创作（v3.6 - 单一标杆驱动 + 调研事实地基）
+        Step 7: 初稿创作（v4.5 - 样文原文驱动 + 调研事实地基 + RAG 知识注入 + 用户补充）
         
-        核心变化：
-        1. 优先使用所选样文的独立 style_profile（单一标杆）
-        2. 如果用户修改了创作指南，人工干预覆盖样文默认特征
-        3. 严禁凭空编造案例
-        4. v3.6 新增：注入 Step 2 调研摘要，确保专业论据有据可依
-        
-        优先级（从高到低）：
-        1. 用户特殊要求 (custom_requirement)
-        2. 用户修改的创作指南 (writing_guidelines)
-        3. 所选样文的 6 维特征约束 (selected_sample.style_profile)
-        4. 频道基本人格设定
+        降维重构：
+        - 不再使用 6 维特征/标签/style_profile
+        - 随机抽取 1-2 篇样文的标题+前 1000 字作为【排版与语气参考样文】
+        - 通过原文直接让大模型感知行文风格
+        - 如果用户在 Step 4 提供了补充信息，注入到 prompt 中
         """
+        import random
+        
         channel_config = self.load_channel_config(channel_id)
         
-        # ================================================================
-        # v3.5: 确定使用的风格来源
-        # ================================================================
-        effective_style_profile = None
-        style_source = "默认"
-        
-        # 优先级1: 使用用户自定义的 style_profile（如果有）
-        if style_profile and style_profile.get('is_customized'):
-            effective_style_profile = style_profile
-            style_source = "用户自定义"
-        # 优先级2: 使用所选样文的独立 style_profile
-        elif selected_sample and selected_sample.get('style_profile'):
-            effective_style_profile = selected_sample['style_profile']
-            style_source = f"样文《{selected_sample.get('title', '未知')}》"
-        # 优先级3: 使用传入的 style_profile（可能是频道整体画像）
-        elif style_profile:
-            effective_style_profile = style_profile
-            style_source = "频道风格画像"
+        # 动态读取全局禁用书目
+        writing_constraints = self.load_writing_constraints()
+        banned_books = writing_constraints.get('banned_books', {})
+        banned_books_list = '、'.join(banned_books.get('list', []))
         
         # ================================================================
-        # 提取风格关键信息
+        # v4.5: 随机抽取 1-2 篇样文原文
         # ================================================================
-        style_instructions = ""
-        structural_logic = []
-        writing_guidelines = []
+        channel_data = db_service.get_channel_by_slug(channel_id)
+        all_samples = []
+        if channel_data:
+            all_samples = db_service.get_style_samples_by_channel(channel_data['id'])
         
-        # 获取结构逻辑和创作指南
-        if effective_style_profile:
-            structural_logic = effective_style_profile.get('structural_logic', [])
-            writing_guidelines = effective_style_profile.get('writing_guidelines', [])
+        sample_section = ""
+        picked_samples = []
+        if all_samples:
+            pick_count = min(len(all_samples), 2)
+            picked_samples = random.sample(all_samples, pick_count)
             
-            # 直接使用样文的特征（不再区分 stable_features 和 dimensions）
-            dims = effective_style_profile
-        else:
-            dims = {}
-        
-        if dims or structural_logic or writing_guidelines:
-            style_instructions = """
-## 🎨 【强制】风格 DNA 对齐（必须 100% 遵守）
-
-"""
-            # ============================================================
-            # 1. 结构逻辑（必须按此顺序组织段落）
-            # ============================================================
-            if structural_logic:
-                style_instructions += "### 📐 段落结构（必须按此顺序）\n"
-                for i, step in enumerate(structural_logic[:6], 1):
-                    style_instructions += f"  {i}. {step}\n"
-                style_instructions += "\n**要求**：文章必须严格按照上述结构安排段落，不得遗漏或乱序。\n\n"
+            sample_section = "## 【排版与语气参考样文】\n"
+            sample_section += "> 请仔细阅读并体会以下参考样文的行文节奏、段落长短、语气语调（如：温润亲切或专业客观）。\n"
+            sample_section += "> 在接下来的创作中，请**严格模仿这种风格**进行输出，但绝不要照抄样文的具体业务内容。\n\n"
             
-            # ============================================================
-            # 2. 六维风格特征
-            # ============================================================
-            if dims:
-                style_instructions += "### 🎭 六维风格特征\n\n"
-                
-                # 开头方式
-                if dims.get('opening_style'):
-                    opening = dims['opening_style']
-                    style_instructions += f"**【开头】** 类型：{opening.get('type', '故事引入')}\n"
-                    if opening.get('description'):
-                        style_instructions += f"  - 要求：{opening['description']}\n"
-                    if opening.get('examples'):
-                        style_instructions += f"  - 参考：「{opening['examples'][0][:50]}...」\n"
-                    style_instructions += "\n"
-                
-                # 句式特征
-                if dims.get('sentence_pattern'):
-                    sp = dims['sentence_pattern']
-                    short_ratio = sp.get('short_ratio', 0.6)
-                    style_instructions += f"**【句式】** 短句占比：{short_ratio * 100:.0f}%\n"
-                    if sp.get('favorite_punctuation'):
-                        style_instructions += f"  - 常用标点：{', '.join(sp['favorite_punctuation'][:5])}\n"
-                    if sp.get('description'):
-                        style_instructions += f"  - 特征：{sp['description']}\n"
-                    style_instructions += "\n"
-                
-                # 段落节奏
-                if dims.get('paragraph_rhythm'):
-                    pr = dims['paragraph_rhythm']
-                    style_instructions += f"**【段落】** 节奏变化：{pr.get('variation', 'medium')}\n"
-                    if pr.get('description'):
-                        style_instructions += f"  - 特征：{pr['description']}\n"
-                    style_instructions += "\n"
-                
-                # 语气特点
-                if dims.get('tone'):
-                    tone = dims['tone']
-                    formality = tone.get('formality', 0.3)
-                    style_instructions += f"**【语气】** 类型：{tone.get('type', '温润亲切')}\n"
-                    style_instructions += f"  - 正式度：{formality * 100:.0f}%（{'口语化' if formality < 0.4 else '半正式' if formality < 0.7 else '正式'}）\n"
-                    if tone.get('description'):
-                        style_instructions += f"  - 要求：{tone['description']}\n"
-                    style_instructions += "\n"
-                
-                # 结尾风格
-                if dims.get('ending_style'):
-                    ending = dims['ending_style']
-                    style_instructions += f"**【结尾】** 类型：{ending.get('type', '引导思考')}\n"
-                    if ending.get('description'):
-                        style_instructions += f"  - 要求：{ending['description']}\n"
-                    style_instructions += "\n"
-                
-                # 常用表达
-                if dims.get('expressions'):
-                    expr = dims['expressions']
-                    if expr.get('high_freq_words'):
-                        style_instructions += f"**【推荐用词】** {', '.join(expr['high_freq_words'][:8])}\n"
-                    if expr.get('avoid_words'):
-                        style_instructions += f"**【禁止用词】** {', '.join(expr['avoid_words'][:8])}（一旦出现即为不合格）\n"
-                    style_instructions += "\n"
-            
-            # ============================================================
-            # 3. 创作指南（每条都是硬性要求）
-            # ============================================================
-            if writing_guidelines:
-                style_instructions += "### 📋 创作指南（每条都是硬性规则）\n"
-                for i, guideline in enumerate(writing_guidelines[:10], 1):
-                    style_instructions += f"  {i}. ✅ {guideline}\n"
-                style_instructions += "\n**审校标准**：上述每条指南都将在 Step 8 审校中逐一检查，不符合的将被退回修改。\n"
-            
-            # ============================================================
-            # 4. 本篇特殊要求（用户自定义，最高优先级）
-            # ============================================================
-            custom_requirement = style_profile.get('custom_requirement') if style_profile else None
-            if custom_requirement:
-                style_instructions += f"\n### ⭐ 本篇特殊要求（最高优先级）\n"
-                style_instructions += f"用户明确要求：{custom_requirement}\n"
-                style_instructions += "**必须严格执行上述特殊要求，不得忽略！**\n"
+            for i, s in enumerate(picked_samples, 1):
+                content_preview = (s.get('content') or '')[:1000]
+                sample_section += f"### 参考样文 {i}：《{s['title']}》\n"
+                sample_section += f"{content_preview}\n"
+                if len(s.get('content', '')) > 1000:
+                    sample_section += "……（已截取前 1000 字）\n"
+                sample_section += "\n"
         
         # ================================================================
-        # v3.7: 构建 System Prompt（瘦身版 - 聚焦手感）
-        # 移除禁令类规则（屏蔽词、禁用书目、严格禁止），交由 Step 8 审校处理
-        # 优先级：调研背景 > 样文风格 > 用户特殊要求 > 频道调性
+        # 构建 System Prompt（v4.5 聚焦样文原文模仿）
         # ================================================================
         system_prompt = f"""{channel_config['system_prompt']['role']}
 
-## 🎯 本次创作的核心目标
-在这一步，请**全神贯注于文字的流动感和对样文风格的精准复刻**。
-无需担心违禁词或用语规范，稍后会有专门的审校环节处理这些细节。
-你的任务是：写出有温度、有节奏、有真实感的初稿。
+## 🎯 你的核心任务
+请全神贯注于文字的流动感和对参考样文风格的精准复刻。写出有温度、有节奏、有真实感的初稿。无需担心排版细节，稍后会有审校环节处理。
 
-## 📊 字数要求
-- 目标字数：{word_count}字
-- 允许范围：{int(word_count * 0.9)}字 ~ {int(word_count * 1.1)}字（±10%偏差）
-
-{style_instructions}
-
-## 📝 频道基础调性
-{chr(10).join(['- ' + style for style in channel_config['system_prompt']['writing_style']])}
-
-## ✅ 必须遵守
-{chr(10).join(['- ' + rule for rule in channel_config['channel_specific_rules']['must_do']])}
-
-## ⚠️ 真实素材约束
-- 文中所有案例、故事、引用必须来自下方提供的【可用素材】或【调研背景】
-- 严禁凭空编造任何案例或数据
-- 如果素材不够用，请简化内容而不是捏造
+## 📊 创作规格
+- 目标字数：{word_count}字（允许范围：{int(word_count * 0.9)} ~ {int(word_count * 1.1)}字）
+- 频道调性：
+{chr(10).join(['  - ' + style for style in channel_config['system_prompt']['writing_style']])}
 """
         
-        # 构建 Think Aloud (v3.7 专注手感模式)
-        is_customized = effective_style_profile.get('is_customized', False) if effective_style_profile else False
-        custom_req = effective_style_profile.get('custom_requirement', '') if effective_style_profile else ''
+        # Think Aloud
         has_knowledge = bool(knowledge_summary and knowledge_summary.strip())
+        has_internal = bool(internal_knowledge and internal_knowledge.strip())
         
-        think_aloud = f"✍️ 开始创作初稿 (专注手感模式)...\n\n"
+        think_aloud = f"✍️ 开始创作初稿 (v4.5 样文原文驱动)...\n\n"
         think_aloud += f"📍 频道：{channel_config['channel_name']}\n"
         think_aloud += f"📍 字数要求：{word_count}字\n"
-        think_aloud += f"📍 风格来源：{style_source}\n"
         
-        # v3.7: 显示优先级顺序
-        think_aloud += "\n🎯 本次创作优先级：\n"
-        if has_knowledge:
-            think_aloud += f"  1️⃣ 调研背景（{len(knowledge_summary)}字摘要）\n"
+        if picked_samples:
+            titles = '、'.join([f"《{s['title']}》" for s in picked_samples])
+            think_aloud += f"📍 参考样文：{titles}（随机抽取 {len(picked_samples)} 篇）\n"
         else:
-            think_aloud += "  1️⃣ 调研背景（无）\n"
-        think_aloud += f"  2️⃣ 样文风格 DNA（{style_source}）\n"
-        if custom_req:
-            think_aloud += f"  3️⃣ 特殊要求：{custom_req[:30]}...\n"
-        else:
-            think_aloud += "  3️⃣ 特殊要求（无）\n"
-        think_aloud += "  4️⃣ 频道基础调性\n"
+            think_aloud += "📍 参考样文：无（将仅依赖频道基础调性）\n"
         
-        think_aloud += "\n💡 专注模式：本步骤聚焦文字流动感与风格复刻，违禁词检查将在 Step 8 执行"
+        think_aloud += "\n💡 本步骤聚焦模仿参考样文的行文风格，违禁词检查将在 Step 8 执行"
         
         # ================================================================
-        # v3.6: 构建调研背景板块（仅在有调研数据时注入）
+        # 构建调研背景板块
         # ================================================================
         knowledge_section = ""
         if has_knowledge:
@@ -1179,27 +1004,70 @@ class WorkflowEngine:
 
 """
         
-        user_message = f"""请创作文章初稿。
+        # ================================================================
+        # 注入 RAG 内部知识库参考
+        # ================================================================
+        rag_section = ""
+        if has_internal:
+            rag_section = f"""## 【补充参考资料】
+> 以下资料来自知识库，既包含老约翰的专业理论、课程详案，也可能包含真实的课堂案例/微素材。
+> 请在行文中自然融合：**以专业理论作为文章的骨架与核心观点，以真实案例/微素材作为论据来增加文章的温度与可读性**。
 
-{knowledge_section}## 选题
+{internal_knowledge}
+
+"""
+            think_aloud += f"\n📚 已注入补充参考资料（{len(internal_knowledge)}字，含专业理论与真实案例）"
+        
+        has_feedback = bool(user_feedback and user_feedback.strip())
+        if has_feedback:
+            think_aloud += f"\n💬 已注入用户补充信息（{len(user_feedback)}字）"
+        
+        feedback_section = ""
+        if has_feedback:
+            feedback_section = f"""## 【用户补充信息】（来自 Step 4）
+> 以下是用户在协作文档阶段主动补充的信息，请务必在创作中采纳和融入。
+
+{user_feedback}
+
+"""
+        
+        # 获取频道专属规则
+        channel_rules = self._build_channel_rules_prompt(channel_config)
+
+        user_message = f"""请为以下选题创作文章初稿：
+
+## 选题
 {selected_topic}
 
 ## 风格指南
 {style_guide}
 
-## 可用素材（只能使用这些，禁止编造）
-{materials}
+=========================================
+【你的创作弹药库（请深度融合以下素材）】
+=========================================
+{sample_section}{knowledge_section}{rag_section}{feedback_section}
+=========================================
+【动笔前的最高军规（系统级硬性校验）】
+=========================================
+请在开始输出正文前，将以下四条军规死死刻在脑子里。系统将对你的输出进行极其严格的词表扫描，任何触碰底线的行为都将导致输出被直接废弃！
 
-## ⚠️ 创作要求
-1. 文章总字数：{int(word_count * 0.9)} ~ {int(word_count * 1.1)} 字（允许±10%偏差）
-2. 严格模仿风格画像中的开头方式、句式节奏、语气特点
-3. 真实素材自然融入，禁止凭空编造案例
-{f"4. 结合【调研背景】中的专业论据，确保内容有事实支撑" if has_knowledge else ""}
+1. **【绝对禁止"无中生妈/生爸"】**：严禁在文章的**任何位置**（不仅是开头）使用"最近收到一位妈妈的留言"、"前几天有位家长问我"等虚构的提问来引出话题！这种方式极度虚假。也不要用"你家孩子是不是也这样..."作为生硬引入。
+2. **【强制使用高级开场白】**：请务必从以下三种高级策略中择一开场：
+- **策略 A：反常识引入** — 直接抛出一个颠覆认知的观点。如："很多人觉得看漫画是浪费时间，但在认知科学里，这其实是一场复杂的视觉推理训练。"
+- **策略 B：微观场景白描** — 像电影镜头一样描绘孩子的真实阅读状态，但不生硬提问。如："把一本纯文字书放在二年级孩子面前，不到两分钟，他的目光就开始游移。这不是因为他不爱阅读，而是因为'阅读耐力'的电量耗尽了。"
+- **策略 C：直击核心概念** — 直接从文章的核心教育理念切入。如："从'看图'跨越到'看字'，是小学低年级阅读中最关键，也是最容易卡壳的分水岭。"
+3. **【防偷懒防占位红线】**：在需要举例时，必须且只能从上方的【补充参考资料】中挑选真实教案。绝对禁止引用以下全网泛滥的禁用书目：{banned_books_list}。严禁在文中写出违禁书名并加括号备注（如"注：此处为示例"），禁止使用任何形式的违禁书目作为占位符！
+4. **【严禁凭空捏造】**：所有案例、故事、数据必须来自上方的参考资料，绝不允许编造。如果资料不够，请简化论述。
+5. **【结构镜像与去 AI 味（最高行文准则）】**：
+   - **结构像素级镜像**：你必须精准识别并采用【参考样文】的文本骨架（是扁平罗列还是叙事推进）。除非样文中出现了多层嵌套结构，否则你**绝对禁止**自行发明"方法一 -> 第一步 -> 做法"这种冗杂的说明书式多层嵌套排版。
+   - **戒断 AI 式行文套路**：严禁高频使用"什么是xxx？"、"怎么做呢？"、"为什么呢？"等生硬的自问自答作为段落过渡，请使用人类作者自然平滑的叙述逻辑。
+   - **拒绝爹味说教**：在分析问题时，必须保持与读者（家长）平视共情的温润基调，绝不允许使用居高临下、指责或过度批判的语气。
 
-请开始创作，直接输出文章内容。
+{channel_rules}
+
+确认已牢记上述军规及频道铁律，请直接输出纯净的文章初稿：
 """
         
-        # 根据字数动态调整 max_tokens（中文约 1.5 字符/token）
         estimated_tokens = min(int(word_count * 1.5), 4000)
         
         result = await ai_service.generate_content(
@@ -1211,7 +1079,9 @@ class WorkflowEngine:
         
         return {
             "output": result,
-            "think_aloud": think_aloud
+            "think_aloud": think_aloud,
+            # 将本次随机抽中的样文标题传递给路由层，以便保存到 brief_data
+            "selected_samples": [{"id": str(s["id"]), "title": s["title"]} for s in picked_samples]
         }
     
     async def execute_step_8(
@@ -1225,10 +1095,10 @@ class WorkflowEngine:
         Step 8: 纪律审校机制（v3.7 - 接管所有禁令检查）
         
         职责：
-        1. 第一遍：去 AI 腔 - 全局屏蔽词 + 频道严格禁止项
-        2. 第二遍：黑名单校验 - 禁用书目检查
-        3. 第三遍：风格 DNA 对齐检查
-        4. 第四遍：细节打磨 + 字数控制
+        1. 第一遍：逻辑把控 - 结构与行文逻辑
+        2. 第二遍：知识准确性核对 - 频道底线 + 全局反偷懒双重质检
+        3. 第三遍：语气润色 - 去 AI 腔 + 屏蔽词替换
+        4. 第四遍：排版与细节审校 - 字数控制 + 长句拆分
         
         反馈机制：发现违禁内容执行局部重写，而非让 Step 7 全局重来
         """
@@ -1261,71 +1131,6 @@ class WorkflowEngine:
         # 频道严格禁止项
         channel_must_not_do = channel_config['channel_specific_rules'].get('must_not_do', [])
         
-        # ================================================================
-        # 构建风格 DNA 对齐检查清单
-        # ================================================================
-        style_checklist = ""
-        if style_profile:
-            dims = style_profile.get('stable_features') or style_profile.get('dimensions', {})
-            structural_logic = style_profile.get('structural_logic', [])
-            writing_guidelines = style_profile.get('writing_guidelines', [])
-            
-            style_checklist = """
-## 🎯 风格 DNA 对齐检查（必须逐项打分）
-
-请对照以下标准检查文章，每项打分 ✓（符合）或 ✗（不符）：
-
-### 结构检查
-"""
-            # 结构逻辑检查
-            if structural_logic:
-                style_checklist += "文章段落是否按以下顺序组织：\n"
-                for i, step in enumerate(structural_logic[:6], 1):
-                    style_checklist += f"  {i}. [ ] {step}\n"
-            
-            # 六维特征检查
-            style_checklist += "\n### 六维特征检查\n"
-            
-            if dims.get('opening_style'):
-                opening = dims['opening_style']
-                style_checklist += f"1. [开头] 是否采用「{opening.get('type', '故事引入')}」方式？ [ ]\n"
-            
-            if dims.get('sentence_pattern'):
-                sp = dims['sentence_pattern']
-                short_ratio = sp.get('short_ratio', 0.6)
-                style_checklist += f"2. [句式] 短句占比是否 ≥ {short_ratio * 100:.0f}%？ [ ]\n"
-                if sp.get('favorite_punctuation'):
-                    style_checklist += f"   - 是否使用了这些标点：{', '.join(sp['favorite_punctuation'][:3])}？ [ ]\n"
-            
-            if dims.get('tone'):
-                tone = dims['tone']
-                style_checklist += f"3. [语气] 是否为「{tone.get('type', '温润亲切')}」风格？ [ ]\n"
-                formality = tone.get('formality', 0.3)
-                style_checklist += f"   - 正式度是否约 {formality * 100:.0f}%？ [ ]\n"
-            
-            if dims.get('ending_style'):
-                ending = dims['ending_style']
-                style_checklist += f"4. [结尾] 是否采用「{ending.get('type', '引导思考')}」方式？ [ ]\n"
-            
-            if dims.get('expressions'):
-                expr = dims['expressions']
-                if expr.get('avoid_words'):
-                    style_checklist += f"5. [禁词] 是否使用了禁止用词 {', '.join(expr['avoid_words'][:5])}？ [ ] （必须为 ✗）\n"
-            
-            # 创作指南检查
-            if writing_guidelines:
-                style_checklist += "\n### 创作指南检查\n"
-                style_checklist += "请逐条检查是否遵守：\n"
-                for i, guideline in enumerate(writing_guidelines[:10], 1):
-                    style_checklist += f"  {i}. [ ] {guideline}\n"
-            
-            style_checklist += """
-### 对齐评分
-- 总分 = 符合项数 / 总项数 × 100%
-- 合格线：≥ 80%
-- 若不合格，必须修改后重新输出
-"""
-        
         # 根据是否超字数调整审校要求（允许 ±10% 偏差）
         word_count_instruction = ""
         if is_over_limit:
@@ -1348,14 +1153,53 @@ class WorkflowEngine:
         # v3.8: 禁用书目从配置文件加载（writing_constraints.json）
         # ================================================================
         
+        channel_rules_prompt = self._build_channel_rules_prompt(channel_config)
+        channel_rules_audit_section = ""
+        if channel_rules_prompt:
+            channel_rules_audit_section = f"""{channel_rules_prompt}
+> 请作为严厉的审核员，逐句检查文章是否违反了上述【绝对禁止】的事项，如果发现，必须彻底改写。
+
+"""
+        
         system_prompt = f"""你是专业的内容审校专家，负责纪律把关和最终润色。
 请对文章进行**四遍专项审校**，发现问题直接**局部重写**修复，无需返回上一步。
 
-{word_count_instruction}
+{channel_rules_audit_section}{word_count_instruction}
 
 ---
 
-## 🔴 第一遍：去 AI 腔（最高优先级）
+## 🔴 第一遍：逻辑把控
+
+检查文章的整体结构与行文逻辑：
+- 文章是否有清晰的起承转合？是否存在段落跳跃、论据断裂？
+- 每个论点是否有对应的论据支撑？是否出现"观点悬空"（只有结论无例证）？
+- 段落之间的过渡是否自然连贯？
+- 如发现问题，直接调整段落顺序或补充过渡句，进行局部重写。
+
+---
+
+## 🟡 第二遍：知识准确性核对（双重质检）
+
+请严格核对文章内容及推荐的书目，执行以下双重检查：
+
+### 1. 【频道专属底线】
+是否违反了该频道的【严格禁止】规则，或包含了该频道的【屏蔽词汇】。绝不要推荐超出该频道受众认知阶段的书籍。
+
+**频道屏蔽词**（禁止出现）：{', '.join(channel_config['blocked_phrases'])}
+**频道严格禁止项**：
+{chr(10).join(['- ❌ ' + rule for rule in channel_must_not_do])}
+
+### 2. 【禁用书目清理法则（泛化与抹除）】
+检查文章是否违规使用了以下书目：{banned_books_list}
+
+如果在初稿中发现了上述禁用书目，绝不能仅仅简单替换书名为"某经典童书"（这会导致保留原书特有情节，造成逻辑荒谬）。
+你必须：直接删除该违禁书名，并**连同删除所有与该书强相关的具体细节（如特定的动物、人名、专属情节）**。将原句平滑重写为一句宏观的阅读现象总结。
+例如：将"看完《夏洛的网》后会追问蜘蛛怎么织网"，整体泛化修改为"看完经典的长篇童书后，孩子会开始追问故事背后的更深层逻辑"。务必确保修改后的上下文逻辑绝对顺畅。
+请在审校报告中对每处清理进行【标红警告】，说明原文内容和泛化后的替代文本。
+
+---
+
+## 🟢 第三遍：语气润色（去 AI 腔）
 
 ### 全局屏蔽词替换表
 请逐一检查文章中是否包含以下词汇，如有则**必须替换**：
@@ -1364,44 +1208,20 @@ class WorkflowEngine:
 |---------|-------|------|
 {chr(10).join(blocked_phrases_with_replacement[:25])}
 
-### 频道屏蔽词
-以下表达禁止出现：{', '.join(channel_config['blocked_phrases'])}
-
-### 频道严格禁止项
-{chr(10).join(['- ❌ ' + rule for rule in channel_must_not_do])}
-
 **替换原则**：
-1. **优先使用上表中的「替换为」建议**
+1. 优先使用上表中的「替换为」建议
 2. 如果替换建议不适合当前语境，可自行调整，但需保持口语化、有温度
 3. 发现违禁词后，直接在原文位置进行局部重写，保持上下文连贯
 
 ---
 
-## 🟡 第二遍：黑名单校验
-
-### 禁用书目（避免 AI 味）
-检查文章中是否引用了以下被过度引用的书籍：
-{banned_books_list}
-
-**处理方式**：
-- {banned_books_hint}
-- 或者删除该书名引用，改用泛化描述
-
----
-
-## 🟢 第三遍：风格 DNA 对齐
-
-{style_checklist}
-
----
-
-## 🔵 第四遍：细节打磨 + 字数控制
+## 🔵 第四遍：排版与细节审校
 
 - 句子长度：拆分超过 40 字的长句
-- 段落长度：每段不超过 200 字
+- 段落长度：每段不超过 200 字，过长段落适当留白分段
 - 标点符号：检查使用是否自然
-- 自然语调：读起来像人在说话
-- 【重要】确保总字数在 {min_allowed}~{max_allowed} 字范围内
+- 自然语调：读起来像人在说话，而非机器输出
+- 【重要】请凭借你的内容把控力，通过删减冗余使文章体量尽量贴近目标要求。**绝对禁止**在最终修改后的文章标题或末尾自己捏造并标注"全文共xxx字"、"修改后版本（xxx字）"等字眼！只输出纯净的正文即可。
 
 ---
 
@@ -1409,24 +1229,20 @@ class WorkflowEngine:
 
 ### 审校报告
 
-#### 第一遍：去 AI 腔
+#### 第一遍：逻辑把控
+- 结构调整：（说明做了哪些段落顺序或过渡句的修改，无问题则注明"结构合理，无需调整"）
+
+#### 第二遍：知识准确性核对
+- 黑名单：（未发现 / 已替换 xxx → xxx）
+- 事实核查：（均有据可依 / 已修正 xxx）
+
+#### 第三遍：语气润色
 | 原文 | 替换为 | 位置 |
 |-----|-------|------|
 | xxx | xxx | 第x段 |
 
-#### 第二遍：黑名单校验
-- [ ] 未发现禁用书目 / 已替换：xxx → xxx
-
-#### 第三遍：风格 DNA 对齐
-| 检查项 | 结果 | 说明 |
-|-------|------|-----|
-| 开头方式 | ✓/✗ | ... |
-| ... | ... | ... |
-
-**对齐分数：xx%**
-
-#### 第四遍：细节打磨
-- 字数：当前 xxx 字（{"需要精简" if is_over_limit else "符合要求"}）
+#### 第四遍：排版与细节审校
+- 冗余精简：已删除/精简了 xxx 等冗长表述（若无严重超标则填"体量适中，正常润色"）
 - 长句拆分：x 处
 - 段落调整：x 处
 
@@ -1439,10 +1255,10 @@ class WorkflowEngine:
         think_aloud = f"🔍 开始纪律审校（v3.7）...\n\n"
         think_aloud += f"📊 当前字数：{current_word_count}字（目标：{word_count}字，允许范围：{min_allowed}~{max_allowed}字）\n\n"
         think_aloud += "📋 四遍专项审校流程：\n"
-        think_aloud += "  🔴 第一遍：去 AI 腔（屏蔽词替换 + 频道禁止项）\n"
-        think_aloud += "  🟡 第二遍：黑名单校验（禁用书目检查）\n"
-        think_aloud += "  🟢 第三遍：风格 DNA 对齐检查\n"
-        think_aloud += "  🔵 第四遍：细节打磨 + 字数控制\n\n"
+        think_aloud += "  🔴 第一遍：逻辑把控（结构调整、起承转合优化）\n"
+        think_aloud += "  🟡 第二遍：知识准确性核对（黑白名单 + 事实核查）\n"
+        think_aloud += "  🟢 第三遍：语气润色（去 AI 腔、屏蔽词替换）\n"
+        think_aloud += "  🔵 第四遍：排版与细节审校（字数控制 + 长句拆分）\n\n"
         think_aloud += "💡 反馈机制：发现违禁内容将执行局部重写，无需返回 Step 7"
         
         # 动态调整 max_tokens
@@ -1450,7 +1266,7 @@ class WorkflowEngine:
         
         result = await ai_service.generate_content(
             system_prompt=system_prompt,
-            user_message=f"请对以下文章进行四遍审校（字数允许范围：{min_allowed}~{max_allowed}字，对齐分数 ≥ 80%）：\n\n{draft}",
+            user_message=f"请对以下文章进行四遍审校（字数允许范围：{min_allowed}~{max_allowed}字）：\n\n{draft}",
             temperature=0.3,
             max_tokens=estimated_tokens
         )
