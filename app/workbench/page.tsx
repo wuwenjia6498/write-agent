@@ -11,6 +11,7 @@ import { subscribeToTask } from '@/lib/supabase'
 import { API_BASE } from '@/lib/api-config'
 import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } from 'docx'
 import { saveAs } from 'file-saver'
+import ArticleEditor from '@/components/ArticleEditor'
 
 // 步骤定义
 const WORKFLOW_STEPS = [
@@ -1556,6 +1557,19 @@ export default function WorkbenchPage() {
                               )
                             })()}
                           </div>
+                        ) : (viewingStep === 7 || viewingStep === 8) && stepOutputs[viewingStep] ? (
+                          /* Step 7/8：使用 ArticleEditor 支持划词重写 */
+                          <div className="max-h-[500px] overflow-y-auto">
+                            <ArticleEditor
+                              content={stepOutputs[viewingStep]}
+                              onContentChange={(newContent) => {
+                                setStepOutputs(prev => ({ ...prev, [viewingStep]: newContent }))
+                              }}
+                              taskId={taskId}
+                              channelSlug={selectedChannel}
+                              contentType={viewingStep === 7 ? 'draft' : 'final'}
+                            />
+                          </div>
                         ) : (
                           /* 其他步骤：默认渲染 */
                           <div className="prose max-w-none">
@@ -1812,13 +1826,28 @@ export default function WorkbenchPage() {
                         })()}
                       </div>
                     ) : stepOutputs[currentStep] && currentStep !== 2 ? (
-                      <div className="prose max-w-none">
-                        <div className="bg-white border border-gray-200 rounded-lg p-6 max-h-[500px] overflow-y-auto">
-                          <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
-                            {stepOutputs[currentStep]}
-                          </pre>
+                      (currentStep === 7 || currentStep === 8) ? (
+                        /* Step 7/8：使用 ArticleEditor 支持划词重写 */
+                        <div className="max-h-[500px] overflow-y-auto">
+                          <ArticleEditor
+                            content={stepOutputs[currentStep]}
+                            onContentChange={(newContent) => {
+                              setStepOutputs(prev => ({ ...prev, [currentStep]: newContent }))
+                            }}
+                            taskId={taskId}
+                            channelSlug={selectedChannel}
+                            contentType={currentStep === 7 ? 'draft' : 'final'}
+                          />
                         </div>
-                      </div>
+                      ) : (
+                        <div className="prose max-w-none">
+                          <div className="bg-white border border-gray-200 rounded-lg p-6 max-h-[500px] overflow-y-auto">
+                            <pre className="whitespace-pre-wrap text-sm text-gray-800 font-sans">
+                              {stepOutputs[currentStep]}
+                            </pre>
+                          </div>
+                        </div>
+                      )
                     ) : null}
                     
                   {/* ======================================================

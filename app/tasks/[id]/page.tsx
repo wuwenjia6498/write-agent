@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import DiffViewer from '@/components/DiffViewer'
+import ArticleEditor from '@/components/ArticleEditor'
 
 import { API_BASE } from '@/lib/api-config'
 
@@ -54,6 +54,8 @@ export default function TaskDetailPage() {
   const [activeStep, setActiveStep] = useState(1)
   const [expandedTopics, setExpandedTopics] = useState<Record<number, boolean>>({})
   const [copiedTopicIndex, setCopiedTopicIndex] = useState<number | null>(null)
+  const [editableDraft, setEditableDraft] = useState<string | null>(null)
+  const [editableFinal, setEditableFinal] = useState<string | null>(null)
 
   useEffect(() => {
     if (taskId) fetchTask()
@@ -65,6 +67,8 @@ export default function TaskDetailPage() {
       if (res.ok) {
         const data = await res.json()
         setTask(data)
+        setEditableDraft(data.draft_content || null)
+        setEditableFinal(data.final_content || null)
         // 默认显示第一步，让用户从头浏览
         setActiveStep(1)
       }
@@ -303,13 +307,7 @@ export default function TaskDetailPage() {
 
           {/* 右侧：内容展示 */}
           <div className="col-span-9">
-            {activeStep === 8 && task.draft_content && task.final_content ? (
-              <DiffViewer
-                draftContent={task.draft_content}
-                finalContent={task.final_content}
-                title="初稿 vs 终稿"
-              />
-            ) : activeStep === 3 ? (
+            {activeStep === 3 ? (
               /* Step 3 特殊渲染：选题卡片形式 */
               <Card className="border-gray-200">
                 <CardHeader>
@@ -603,6 +601,30 @@ export default function TaskDetailPage() {
                       </div>
                     </div>
                   </div>
+                </CardContent>
+              </Card>
+            ) : (activeStep === 7 || activeStep === 8) && (editableDraft || editableFinal) ? (
+              /* Step 7/8：使用 ArticleEditor 支持划词重写 */
+              <Card className="border-gray-200">
+                <CardHeader>
+                  <CardTitle className="text-base">
+                    Step {activeStep}: {WORKFLOW_STEPS[activeStep - 1]?.name}
+                  </CardTitle>
+                </CardHeader>
+                <Separator />
+                <CardContent className="pt-4">
+                  <ScrollArea className="h-[650px]">
+                    <ArticleEditor
+                      content={activeStep === 7 ? (editableDraft || '') : (editableFinal || editableDraft || '')}
+                      onContentChange={(newContent) => {
+                        if (activeStep === 7) setEditableDraft(newContent)
+                        else setEditableFinal(newContent)
+                      }}
+                      taskId={taskId}
+                      channelSlug={task?.channel_slug || ''}
+                      contentType={activeStep === 7 ? 'draft' : 'final'}
+                    />
+                  </ScrollArea>
                 </CardContent>
               </Card>
             ) : (
