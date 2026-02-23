@@ -1,11 +1,9 @@
 # Nixpacks 构建配置
-# 强制使用 Python 3.11 构建后端服务，避免被识别为 Node.js 项目
+# 强制 Railway 识别为 Python 项目（根目录有 package.json 会误判为 Node.js）
+# startCommand 在 railway.toml 中定义，此处仅处理构建阶段
 
 [phases.setup]
 nixPkgs = ["python311", "python311Packages.pip"]
 
 [phases.install]
 cmds = ["pip install -r server/requirements.txt"]
-
-[start]
-cmd = "cd server && python main.py"
