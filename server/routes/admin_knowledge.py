@@ -353,13 +353,19 @@ def diagnose_knowledge_env(db: Session = Depends(get_db)):
 
     result = {}
 
-    # 1. 检查环境变量
+    # 1. 检查环境变量（列出所有包含 OPENAI 的 key，帮助排查注入问题）
     openai_key = os.getenv("OPENAI_API_KEY", "")
     openai_base = os.getenv("OPENAI_BASE_URL", "")
+    openai_api_base = os.getenv("OPENAI_API_BASE", "")
+
+    openai_related_keys = sorted([k for k in os.environ.keys() if "OPENAI" in k.upper()])
+
     result["env"] = {
         "OPENAI_API_KEY": f"{openai_key[:12]}..." if openai_key else "未配置",
-        "OPENAI_BASE_URL": openai_base if openai_base else "未配置（将直连 OpenAI 官方地址）",
+        "OPENAI_BASE_URL": openai_base if openai_base else "未配置",
+        "OPENAI_API_BASE": openai_api_base if openai_api_base else "未配置",
         "DATABASE_URL": "已配置" if os.getenv("DATABASE_URL") else "未配置",
+        "all_openai_env_keys": openai_related_keys,
     }
 
     # 2. 检查向量检索服务是否可用
