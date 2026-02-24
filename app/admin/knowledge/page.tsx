@@ -58,6 +58,21 @@ interface UploadResult {
   source_filename: string
 }
 
+interface FileUploadDetail {
+  filename: string
+  success: boolean
+  chunks_count?: number
+  error?: string
+}
+
+interface BatchUploadResult {
+  total: number
+  successCount: number
+  failCount: number
+  totalChunks: number
+  details: FileUploadDetail[]
+}
+
 interface KnowledgeFile {
   source_filename: string
   channel_scope: string
@@ -83,97 +98,149 @@ function formatDate(iso: string | null): string {
 // ---- 拖拽上传区组件 ----
 
 function DropZone({
-  file,
-  onFileSelect,
+  files,
+  onFilesChange,
   disabled,
 }: {
-  file: File | null
-  onFileSelect: (f: File | null) => void
+  files: File[]
+  onFilesChange: (f: File[]) => void
   disabled: boolean
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = useState(false)
+
+  // 过滤合法扩展名并去重（按文件名 + 大小判断）
+  const mergeFiles = useCallback(
+    (incoming: File[]) => {
+      const validExts = ACCEPT_EXTENSIONS.split(',')
+      const filtered = incoming.filter((f) => {
+        const ext = '.' + f.name.split('.').pop()?.toLowerCase()
+        return validExts.includes(ext)
+      })
+      const existing = new Set(files.map((f) => `${f.name}__${f.size}`))
+      const deduped = filtered.filter((f) => !existing.has(`${f.name}__${f.size}`))
+      if (deduped.length > 0) onFilesChange([...files, ...deduped])
+    },
+    [files, onFilesChange],
+  )
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
       setDragOver(false)
       if (disabled) return
-      const droppedFile = e.dataTransfer.files[0]
-      if (droppedFile) onFileSelect(droppedFile)
+      const dropped = Array.from(e.dataTransfer.files)
+      if (dropped.length > 0) mergeFiles(dropped)
     },
-    [disabled, onFileSelect],
+    [disabled, mergeFiles],
   )
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const selected = e.target.files?.[0] ?? null
-    onFileSelect(selected)
+    const selected = Array.from(e.target.files ?? [])
+    if (selected.length > 0) mergeFiles(selected)
+    if (inputRef.current) inputRef.current.value = ''
   }
 
-  const ext = file ? file.name.split('.').pop()?.toUpperCase() : null
+  const removeFile = (index: number) => {
+    onFilesChange(files.filter((_, i) => i !== index))
+  }
 
   return (
-    <div
-      onDragOver={(e) => {
-        e.preventDefault()
-        if (!disabled) setDragOver(true)
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={handleDrop}
-      onClick={() => !disabled && inputRef.current?.click()}
-      className={`
-        relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed
-        px-6 py-10 transition-all duration-200 cursor-pointer
-        ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
-        ${dragOver ? 'border-[#3a5e98] bg-[#3a5e98]/5' : 'border-gray-300 hover:border-[#3a5e98]/50 hover:bg-gray-50'}
-      `}
-    >
-      <input
-        ref={inputRef}
-        type="file"
-        accept={ACCEPT_EXTENSIONS}
-        onChange={handleChange}
-        className="hidden"
-        disabled={disabled}
-      />
-
-      {file ? (
-        <div className="flex flex-col items-center gap-2">
-          <div className="w-12 h-12 rounded-xl bg-[#3a5e98]/10 flex items-center justify-center">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#3a5e98" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="16" y1="13" x2="8" y2="13" />
-              <line x1="16" y1="17" x2="8" y2="17" />
-            </svg>
-          </div>
-          <p className="text-sm font-medium text-gray-900 truncate max-w-[260px]">{file.name}</p>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" className="text-xs">{ext}</Badge>
-            <span className="text-xs text-gray-400">{(file.size / 1024).toFixed(1)} KB</span>
-          </div>
-          {!disabled && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onFileSelect(null)
-              }}
-              className="mt-1 text-xs text-red-500 hover:text-red-700 transition-colors"
-            >
-              移除文件
-            </button>
-          )}
-        </div>
-      ) : (
+    <div className="space-y-3">
+      {/* 拖拽 / 点击区域 */}
+      <div
+        onDragOver={(e) => {
+          e.preventDefault()
+          if (!disabled) setDragOver(true)
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+        onClick={() => !disabled && inputRef.current?.click()}
+        className={`
+          relative flex flex-col items-center justify-center rounded-xl border-2 border-dashed
+          px-6 py-8 transition-all duration-200 cursor-pointer
+          ${disabled ? 'opacity-50 cursor-not-allowed' : ''}
+          ${dragOver ? 'border-[#3a5e98] bg-[#3a5e98]/5' : 'border-gray-300 hover:border-[#3a5e98]/50 hover:bg-gray-50'}
+        `}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          accept={ACCEPT_EXTENSIONS}
+          multiple
+          onChange={handleChange}
+          className="hidden"
+          disabled={disabled}
+        />
         <div className="flex flex-col items-center gap-2 text-gray-400">
           <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
             <polyline points="17 8 12 3 7 8" />
             <line x1="12" y1="3" x2="12" y2="15" />
           </svg>
-          <p className="text-sm font-medium">拖拽文件到此处，或点击选择</p>
-          <p className="text-xs">支持 .docx、.pdf 格式</p>
+          <p className="text-sm font-medium">
+            {files.length > 0 ? '继续添加文件' : '拖拽文件到此处，或点击选择'}
+          </p>
+          <p className="text-xs">支持 .docx、.pdf 格式，可一次选择多个文件</p>
+        </div>
+      </div>
+
+      {/* 已选文件列表 */}
+      {files.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-gray-500">
+              已选择 {files.length} 个文件
+            </span>
+            {!disabled && files.length > 1 && (
+              <button
+                type="button"
+                onClick={() => onFilesChange([])}
+                className="text-xs text-red-500 hover:text-red-700 transition-colors"
+              >
+                清空全部
+              </button>
+            )}
+          </div>
+          <div className="space-y-1.5 max-h-[240px] overflow-y-auto pr-1">
+            {files.map((f, i) => {
+              const ext = f.name.split('.').pop()?.toUpperCase()
+              return (
+                <div
+                  key={`${f.name}-${f.size}-${i}`}
+                  className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2 group hover:border-gray-300 transition-colors"
+                >
+                  <div className="w-8 h-8 rounded-lg bg-[#3a5e98]/8 flex items-center justify-center shrink-0">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3a5e98" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-gray-900 truncate" title={f.name}>{f.name}</p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0">{ext}</Badge>
+                      <span className="text-[10px] text-gray-400">{(f.size / 1024).toFixed(1)} KB</span>
+                    </div>
+                  </div>
+                  {!disabled && (
+                    <button
+                      type="button"
+                      onClick={() => removeFile(i)}
+                      className="shrink-0 w-6 h-6 flex items-center justify-center rounded-md
+                                 text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors
+                                 opacity-0 group-hover:opacity-100"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -182,58 +249,85 @@ function DropZone({
 
 // ---- Toast 提示组件 ----
 
-function Toast({
+function BatchToast({
   status,
-  result,
-  errorMsg,
+  batchResult,
   onClose,
 }: {
   status: UploadStatus
-  result: UploadResult | null
-  errorMsg: string
+  batchResult: BatchUploadResult | null
   onClose: () => void
 }) {
-  if (status === 'idle' || status === 'uploading') return null
+  if (status === 'idle' || status === 'uploading' || !batchResult) return null
 
-  const isSuccess = status === 'success'
+  const allSuccess = batchResult.failCount === 0
+  const allFail = batchResult.successCount === 0
+  const borderColor = allFail ? 'border-red-200' : 'border-emerald-200'
+  const bgColor = allFail ? 'bg-red-50' : 'bg-emerald-50'
 
   return (
-    <div
-      className={`
-        flex items-start gap-3 rounded-xl border px-5 py-4 shadow-sm animate-in fade-in slide-in-from-top-2 duration-300
-        ${isSuccess ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}
-      `}
-    >
-      {isSuccess ? (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0">
-          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
-          <polyline points="22 4 12 14.01 9 11.01" />
-        </svg>
-      ) : (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="15" y1="9" x2="9" y2="15" />
-          <line x1="9" y1="9" x2="15" y2="15" />
-        </svg>
-      )}
-
-      <div className="flex-1 min-w-0">
-        <p className={`text-sm font-medium ${isSuccess ? 'text-emerald-800' : 'text-red-800'}`}>
-          {isSuccess ? '上传成功' : '上传失败'}
-        </p>
-        <p className={`text-xs mt-0.5 ${isSuccess ? 'text-emerald-600' : 'text-red-600'}`}>
-          {isSuccess && result
-            ? `文件 "${result.source_filename}" 已成功处理，共生成 ${result.chunks_count} 个知识切片`
-            : errorMsg || '未知错误，请重试'}
-        </p>
+    <div className={`rounded-xl border ${borderColor} ${bgColor} shadow-sm animate-in fade-in slide-in-from-top-2 duration-300 overflow-hidden`}>
+      {/* 汇总信息 */}
+      <div className="flex items-start gap-3 px-5 py-4">
+        {allFail ? (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="15" y1="9" x2="9" y2="15" />
+            <line x1="9" y1="9" x2="15" y2="15" />
+          </svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+            <polyline points="22 4 12 14.01 9 11.01" />
+          </svg>
+        )}
+        <div className="flex-1 min-w-0">
+          <p className={`text-sm font-medium ${allFail ? 'text-red-800' : 'text-emerald-800'}`}>
+            {allSuccess
+              ? `全部上传成功（${batchResult.total} 个文件）`
+              : allFail
+                ? `全部上传失败（${batchResult.total} 个文件）`
+                : `部分上传成功（${batchResult.successCount} 成功 / ${batchResult.failCount} 失败）`}
+          </p>
+          {batchResult.successCount > 0 && (
+            <p className="text-xs mt-0.5 text-emerald-600">
+              共生成 {batchResult.totalChunks} 个知识切片
+            </p>
+          )}
+        </div>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors shrink-0">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
       </div>
 
-      <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors shrink-0">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
-      </button>
+      {/* 逐文件明细（超过 1 个文件时展示） */}
+      {batchResult.total > 1 && (
+        <div className="border-t border-gray-200/60 px-5 py-3 space-y-1.5 bg-white/50">
+          {batchResult.details.map((d, i) => (
+            <div key={i} className="flex items-center gap-2 text-xs">
+              {d.success ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#059669" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                  <polyline points="20 6 9 17 4 12" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              )}
+              <span className={`truncate ${d.success ? 'text-gray-700' : 'text-red-700'}`}>
+                {d.filename}
+              </span>
+              <span className="text-gray-400 shrink-0 ml-auto">
+                {d.success ? `${d.chunks_count} 个切片` : d.error}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -437,15 +531,16 @@ export default function AdminKnowledgePage() {
   )
   // 上传模式：文件上传 or 手动录入
   const [inputMode, setInputMode] = useState<'file' | 'text'>('file')
-  // 文件上传
-  const [file, setFile] = useState<File | null>(null)
+  // 文件上传（支持多文件）
+  const [files, setFiles] = useState<File[]>([])
   // 手动录入
   const [textTitle, setTextTitle] = useState('')
   const [textContent, setTextContent] = useState('')
 
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle')
-  const [uploadResult, setUploadResult] = useState<UploadResult | null>(null)
-  const [uploadErrorMsg, setUploadErrorMsg] = useState('')
+  const [batchResult, setBatchResult] = useState<BatchUploadResult | null>(null)
+  // 上传进度追踪（当前处理到第几个文件）
+  const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 })
 
   // ---- 列表状态 ----
   const [fileList, setFileList] = useState<KnowledgeFile[]>([])
@@ -503,40 +598,54 @@ export default function AdminKnowledgePage() {
     }
   }, [activeTab, fetchList])
 
-  // ---- 上传提交 ----
+  // ---- 批量上传提交：逐文件串行处理 ----
   const handleSubmit = async () => {
-    if (!file || isUploading) return
+    if (files.length === 0 || isUploading) return
 
     setUploadStatus('uploading')
-    setUploadResult(null)
-    setUploadErrorMsg('')
+    setBatchResult(null)
 
-    try {
-      const formData = new FormData()
-      formData.append('file', file)
-      formData.append('channel_scope', channelScope)
-      formData.append('material_type', materialType)
+    const total = files.length
+    setUploadProgress({ current: 0, total })
 
-      const res = await fetch(`${API_BASE}/admin/knowledge/upload`, {
-        method: 'POST',
-        body: formData,
-      })
+    const details: FileUploadDetail[] = []
+    let successCount = 0
+    let failCount = 0
+    let totalChunks = 0
 
-      if (!res.ok) {
-        const errBody = await res.json().catch(() => ({ detail: '服务器响应异常' }))
-        throw new Error(errBody.detail || `HTTP ${res.status}`)
+    for (let i = 0; i < files.length; i++) {
+      setUploadProgress({ current: i + 1, total })
+
+      try {
+        const formData = new FormData()
+        formData.append('file', files[i])
+        formData.append('channel_scope', channelScope)
+        formData.append('material_type', materialType)
+
+        const res = await fetch(`${API_BASE}/admin/knowledge/upload`, {
+          method: 'POST',
+          body: formData,
+        })
+
+        if (!res.ok) {
+          const errBody = await res.json().catch(() => ({ detail: '服务器响应异常' }))
+          throw new Error(errBody.detail || `HTTP ${res.status}`)
+        }
+
+        const data: UploadResult = await res.json()
+        details.push({ filename: files[i].name, success: true, chunks_count: data.chunks_count })
+        successCount++
+        totalChunks += data.chunks_count
+      } catch (err: any) {
+        details.push({ filename: files[i].name, success: false, error: err.message || '处理失败' })
+        failCount++
       }
-
-      const data: UploadResult = await res.json()
-      setUploadResult(data)
-      setUploadStatus('success')
-      setFile(null)
-      // 上传成功后刷新列表（切换到列表 Tab 时会看到最新数据）
-      fetchList()
-    } catch (err: any) {
-      setUploadErrorMsg(err.message || '网络请求失败')
-      setUploadStatus('error')
     }
+
+    setBatchResult({ total, successCount, failCount, totalChunks, details })
+    setUploadStatus(failCount === total ? 'error' : 'success')
+    setFiles([])
+    fetchList()
   }
 
   // ---- 手动录入提交 ----
@@ -544,8 +653,7 @@ export default function AdminKnowledgePage() {
     if (!textTitle.trim() || !textContent.trim() || isUploading) return
 
     setUploadStatus('uploading')
-    setUploadResult(null)
-    setUploadErrorMsg('')
+    setBatchResult(null)
 
     try {
       const res = await fetch(`${API_BASE}/admin/knowledge/upload_text`, {
@@ -565,13 +673,25 @@ export default function AdminKnowledgePage() {
       }
 
       const data: UploadResult = await res.json()
-      setUploadResult(data)
+      setBatchResult({
+        total: 1,
+        successCount: 1,
+        failCount: 0,
+        totalChunks: data.chunks_count,
+        details: [{ filename: data.source_filename, success: true, chunks_count: data.chunks_count }],
+      })
       setUploadStatus('success')
       setTextTitle('')
       setTextContent('')
       fetchList()
     } catch (err: any) {
-      setUploadErrorMsg(err.message || '网络请求失败')
+      setBatchResult({
+        total: 1,
+        successCount: 0,
+        failCount: 1,
+        totalChunks: 0,
+        details: [{ filename: textTitle.trim(), success: false, error: err.message || '处理失败' }],
+      })
       setUploadStatus('error')
     }
   }
@@ -627,10 +747,9 @@ export default function AdminKnowledgePage() {
       <div className="max-w-5xl mx-auto p-6 space-y-5">
         {/* Toast（仅上传 Tab 显示） */}
         {activeTab === 'upload' && (
-          <Toast
+          <BatchToast
             status={uploadStatus}
-            result={uploadResult}
-            errorMsg={uploadErrorMsg}
+            batchResult={batchResult}
             onClose={() => setUploadStatus('idle')}
           />
         )}
@@ -767,12 +886,12 @@ export default function AdminKnowledgePage() {
                     <>
                       <div className="space-y-1.5">
                         <Label className="text-sm font-medium text-gray-700">选择文件</Label>
-                        <DropZone file={file} onFileSelect={setFile} disabled={isUploading} />
+                        <DropZone files={files} onFilesChange={setFiles} disabled={isUploading} />
                       </div>
 
                       <Button
                         onClick={handleSubmit}
-                        disabled={!file || isUploading}
+                        disabled={files.length === 0 || isUploading}
                         className="w-full bg-[#3a5e98] hover:bg-[#2d4a78] text-white h-11 text-sm font-medium
                                    disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                       >
@@ -782,9 +901,11 @@ export default function AdminKnowledgePage() {
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                             </svg>
-                            正在处理，请稍候...
+                            正在处理第 {uploadProgress.current}/{uploadProgress.total} 个文件...
                           </span>
-                        ) : '上传并向量化'}
+                        ) : files.length > 1
+                          ? `上传并向量化（${files.length} 个文件）`
+                          : '上传并向量化'}
                       </Button>
                     </>
                   )}
@@ -870,7 +991,9 @@ export default function AdminKnowledgePage() {
                     </span>
                     <span className="text-xs text-gray-700 truncate max-w-[140px]">
                       {inputMode === 'file'
-                        ? (file ? file.name : '未选择')
+                        ? (files.length > 0
+                            ? `已选 ${files.length} 个文件`
+                            : '未选择')
                         : (textTitle.trim() || '未填写')}
                     </span>
                   </div>

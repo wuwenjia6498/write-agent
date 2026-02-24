@@ -243,15 +243,7 @@ export default function TaskDetailPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <AppHeader 
-        title={task.title || '任务详情'} 
-        subtitle={`${task.channel_slug} · ${new Date(task.created_at).toLocaleString()}`}
-      >
-        <Badge variant="secondary" className="bg-gray-100 text-gray-700">
-          {task.status === 'completed' ? '已完成' :
-           task.status === 'waiting_confirm' ? '等待确认' : '进行中'}
-        </Badge>
-      </AppHeader>
+      <AppHeader title="任务详情" subtitle="Task Detail" />
 
       <div className="max-w-7xl mx-auto p-6">
         {/* 返回列表按钮 */}
@@ -264,6 +256,18 @@ export default function TaskDetailPage() {
               返回任务列表
             </Button>
           </Link>
+        </div>
+
+        {/* 任务标题卡片 */}
+        <div className="mb-5 flex items-start gap-3 px-4 py-3 bg-white border border-gray-200 rounded-xl shadow-sm">
+          <div className="flex-1 min-w-0">
+            <p className="text-base font-medium text-gray-900 leading-relaxed">{task.title || '无标题任务'}</p>
+            <p className="text-sm text-gray-400 mt-0.5">{task.channel_slug} · {new Date(task.created_at).toLocaleString()}</p>
+          </div>
+          <Badge variant="secondary" className="flex-shrink-0 bg-gray-100 text-gray-700 mt-0.5">
+            {task.status === 'completed' ? '已完成' :
+             task.status === 'waiting_confirm' ? '等待确认' : '进行中'}
+          </Badge>
         </div>
         <div className="grid grid-cols-12 gap-6">
           {/* 左侧：步骤导航 */}
