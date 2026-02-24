@@ -49,18 +49,24 @@ class DocumentParserService:
         )
 
     # ------------------------------------------------------------------
-    # Embedding 懒加载（显式读取 OPENAI_BASE_URL 支持中转代理）
+    # Embedding 懒加载（兜底到 ANTHROPIC_* 变量，适配 Railway 环境）
     # ------------------------------------------------------------------
     def _get_embeddings(self) -> OpenAIEmbeddings:
         if self._embeddings is None:
-            api_key = os.getenv("OPENAI_API_KEY", "")
-            base_url = os.getenv("OPENAI_BASE_URL", "")
+            api_key = os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
+            base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE", "")
+            if not base_url:
+                anthropic_base = os.getenv("ANTHROPIC_BASE_URL", "")
+                if anthropic_base:
+                    base_url = anthropic_base.rstrip("/") + "/v1"
+
             kwargs: dict = {"model": "text-embedding-3-small"}
             if api_key:
                 kwargs["api_key"] = api_key
             if base_url:
                 kwargs["base_url"] = base_url
-                print(f"[DocParser] OpenAI Embedding 使用自定义 Base URL: {base_url}")
+
+            print(f"[DocParser] Embedding 初始化: key={api_key[:12] + '...' if api_key else 'None'} | base_url={base_url or '(默认)'}")
             self._embeddings = OpenAIEmbeddings(**kwargs)
         return self._embeddings
 

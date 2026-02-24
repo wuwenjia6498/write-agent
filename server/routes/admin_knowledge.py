@@ -353,19 +353,22 @@ def diagnose_knowledge_env(db: Session = Depends(get_db)):
 
     result = {}
 
-    # 1. 检查环境变量（列出所有包含 OPENAI 的 key，帮助排查注入问题）
+    # 1. 检查环境变量（含兜底到 ANTHROPIC_* 的检测）
     openai_key = os.getenv("OPENAI_API_KEY", "")
+    anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+    effective_key = openai_key or anthropic_key
+
     openai_base = os.getenv("OPENAI_BASE_URL", "")
     openai_api_base = os.getenv("OPENAI_API_BASE", "")
-
-    openai_related_keys = sorted([k for k in os.environ.keys() if "OPENAI" in k.upper()])
+    anthropic_base = os.getenv("ANTHROPIC_BASE_URL", "")
+    effective_base = openai_base or openai_api_base or (anthropic_base.rstrip("/") + "/v1" if anthropic_base else "")
 
     result["env"] = {
         "OPENAI_API_KEY": f"{openai_key[:12]}..." if openai_key else "未配置",
-        "OPENAI_BASE_URL": openai_base if openai_base else "未配置",
-        "OPENAI_API_BASE": openai_api_base if openai_api_base else "未配置",
+        "ANTHROPIC_API_KEY_fallback": f"{anthropic_key[:12]}..." if anthropic_key else "未配置",
+        "effective_api_key": f"{effective_key[:12]}..." if effective_key else "全部未配置",
+        "effective_base_url": effective_base if effective_base else "未配置",
         "DATABASE_URL": "已配置" if os.getenv("DATABASE_URL") else "未配置",
-        "all_openai_env_keys": openai_related_keys,
     }
 
     # 2. 检查向量检索服务是否可用

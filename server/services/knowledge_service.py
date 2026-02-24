@@ -37,20 +37,28 @@ class KnowledgeService:
     # 初始化 & 可用性检查
     # ------------------------------------------------------------------
     def _get_embeddings(self) -> Optional[OpenAIEmbeddings]:
-        """懒加载 OpenAI Embeddings 实例，显式读取 OPENAI_BASE_URL 支持中转代理"""
+        """
+        懒加载 OpenAI Embeddings 实例。
+        优先读 OPENAI_* 环境变量，若不可用则自动兜底到 ANTHROPIC_* 变量
+        （适配 AIHUBMIX 统一密钥场景 & Railway 环境变量注入问题）
+        """
         if self._embeddings is None:
-            api_key = os.getenv("OPENAI_API_KEY", "")
+            api_key = os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY", "")
             if not api_key:
-                print("[RAG] ⚠ OPENAI_API_KEY 未配置，向量检索不可用")
+                print("[RAG] ⚠ OPENAI_API_KEY / ANTHROPIC_API_KEY 均未配置，向量检索不可用")
                 return None
 
-            base_url = os.getenv("OPENAI_BASE_URL", "")
+            base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("OPENAI_API_BASE", "")
+            if not base_url:
+                anthropic_base = os.getenv("ANTHROPIC_BASE_URL", "")
+                if anthropic_base:
+                    base_url = anthropic_base.rstrip("/") + "/v1"
+
             kwargs: dict = {"model": "text-embedding-3-small", "api_key": api_key}
             if base_url:
                 kwargs["base_url"] = base_url
-                print(f"[RAG] OpenAI Embedding 使用自定义 Base URL: {base_url}")
-            else:
-                print("[RAG] ⚠ OPENAI_BASE_URL 未配置，将直连 OpenAI 官方地址（若使用第三方代理则需要配置此变量）")
+
+            print(f"[RAG] Embedding 初始化: key={api_key[:12]}... | base_url={base_url or '(OpenAI 官方)'}")
 
             try:
                 self._embeddings = OpenAIEmbeddings(**kwargs)
