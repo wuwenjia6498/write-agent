@@ -49,11 +49,19 @@ class DocumentParserService:
         )
 
     # ------------------------------------------------------------------
-    # Embedding 懒加载
+    # Embedding 懒加载（显式读取 OPENAI_BASE_URL 支持中转代理）
     # ------------------------------------------------------------------
     def _get_embeddings(self) -> OpenAIEmbeddings:
         if self._embeddings is None:
-            self._embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+            api_key = os.getenv("OPENAI_API_KEY", "")
+            base_url = os.getenv("OPENAI_BASE_URL", "")
+            kwargs: dict = {"model": "text-embedding-3-small"}
+            if api_key:
+                kwargs["api_key"] = api_key
+            if base_url:
+                kwargs["base_url"] = base_url
+                print(f"[DocParser] OpenAI Embedding 使用自定义 Base URL: {base_url}")
+            self._embeddings = OpenAIEmbeddings(**kwargs)
         return self._embeddings
 
     # ------------------------------------------------------------------

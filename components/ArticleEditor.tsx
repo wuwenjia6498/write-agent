@@ -191,8 +191,9 @@ export default function ArticleEditor({
 
   // ========================================================================
   // 调用 AI 重写（结果暂存到 suggestedText，不直接替换）
+  // extraInstruction: 可选的附加指令，重试时用于要求 AI 给出不同版本
   // ========================================================================
-  const handleRewrite = useCallback(async () => {
+  const handleRewrite = useCallback(async (extraInstruction?: string) => {
     if (!selection || !instruction.trim()) return
     setIsRewriting(true)
     setSuggestedText(null)
@@ -203,6 +204,10 @@ export default function ArticleEditor({
     const ctxEnd = Math.min(content.length, selection.endIndex + 200)
     const surroundingContext = content.slice(ctxStart, ctxEnd)
 
+    const finalInstruction = extraInstruction
+      ? `${instruction}（${extraInstruction}）`
+      : instruction
+
     try {
       const res = await fetch(`${API_BASE}/ai/inline-rewrite`, {
         method: 'POST',
@@ -212,7 +217,7 @@ export default function ArticleEditor({
           channel_slug: channelSlug,
           selected_text: selection.text,
           surrounding_context: surroundingContext,
-          user_instruction: instruction,
+          user_instruction: finalInstruction,
         }),
       })
 
@@ -261,10 +266,10 @@ export default function ArticleEditor({
     silentSave(newContent)
   }, [selection, suggestedText, content, onContentChange, silentSave])
 
-  // 🔄 重试：用相同指令重新请求
+  // 🔄 重试：附加"提供不同写法"的隐式指令，强制 AI 给出有别于上次的版本
   const handleRetry = useCallback(() => {
     setSuggestedText(null)
-    handleRewrite()
+    handleRewrite('请提供与上次完全不同的新写法，换一种角度和表达方式')
   }, [handleRewrite])
 
   // ❌ 取消：放弃修改，关闭浮层

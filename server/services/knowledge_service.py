@@ -37,13 +37,27 @@ class KnowledgeService:
     # 初始化 & 可用性检查
     # ------------------------------------------------------------------
     def _get_embeddings(self) -> Optional[OpenAIEmbeddings]:
-        """懒加载 OpenAI Embeddings 实例"""
+        """懒加载 OpenAI Embeddings 实例，显式读取 OPENAI_BASE_URL 支持中转代理"""
         if self._embeddings is None:
             api_key = os.getenv("OPENAI_API_KEY", "")
-            if api_key:
-                self._embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-            else:
+            if not api_key:
                 print("[RAG] ⚠ OPENAI_API_KEY 未配置，向量检索不可用")
+                return None
+
+            base_url = os.getenv("OPENAI_BASE_URL", "")
+            kwargs: dict = {"model": "text-embedding-3-small", "api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+                print(f"[RAG] OpenAI Embedding 使用自定义 Base URL: {base_url}")
+            else:
+                print("[RAG] ⚠ OPENAI_BASE_URL 未配置，将直连 OpenAI 官方地址（若使用第三方代理则需要配置此变量）")
+
+            try:
+                self._embeddings = OpenAIEmbeddings(**kwargs)
+            except Exception as e:
+                print(f"[RAG] ⚠ OpenAIEmbeddings 初始化失败: {e}")
+                return None
+
         return self._embeddings
 
     def is_available(self) -> bool:
@@ -87,7 +101,7 @@ class KnowledgeService:
         try:
             embedding = self._get_embeddings().embed_query(query)
         except Exception as e:
-            print(f"[RAG] ⚠ Query 向量化失败: {e}")
+            print(f"[RAG] ⚠ Query 向量化失败（请检查 OPENAI_API_KEY / OPENAI_BASE_URL 是否在部署环境中正确配置）: {e}")
             return []
 
         # parenting 频道：跨三个频道检索（虚拟借用）

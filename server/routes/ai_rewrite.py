@@ -88,7 +88,7 @@ async def inline_rewrite(request: InlineRewriteRequest):
     result = await ai_service.generate_content(
         system_prompt=system_prompt,
         user_message=user_message,
-        temperature=0.6,
+        temperature=1.0,
         max_tokens=1024
     )
 
