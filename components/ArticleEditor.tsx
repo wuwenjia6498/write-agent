@@ -420,7 +420,7 @@ export default function ArticleEditor({
             autoFocus
           />
           <button
-            onClick={handleRewrite}
+            onClick={() => handleRewrite()}
             disabled={!instruction.trim()}
             className="flex-shrink-0 w-10 h-10 self-end flex items-center justify-center rounded-lg bg-[#3a5e98] hover:bg-[#2d4a78] text-white disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
             title="AI 重写"
