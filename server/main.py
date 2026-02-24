@@ -23,7 +23,7 @@ load_dotenv()
 app = FastAPI(
     title="老约翰自动化写作AGENT",
     description="基于AI的品牌内容创作平台 - 两层判断 + 9步SOP",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 # CORS 配置 - 允许前端访问
