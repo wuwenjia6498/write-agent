@@ -14,11 +14,11 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from sqlalchemy import func, text as sql_text
+from sqlalchemy import func
+from sqlalchemy import text as sql_text
 
 from services.document_parser import document_parser, SUPPORTED_EXTENSIONS
-from services.knowledge_service import knowledge_service
-from database.config import get_db, SessionLocal
+from database.config import get_db
 from database.models import KnowledgeChunk
 
 router = APIRouter()
@@ -348,19 +348,22 @@ def diagnose_knowledge_env(db: Session = Depends(get_db)):
     诊断知识库相关的环境变量与数据库连接状态。
     用于排查生产环境向量检索不可用的问题。
     """
+    # 延迟导入，避免模块加载时的循环依赖问题
+    from services.knowledge_service import knowledge_service
+
     result = {}
 
     # 1. 检查环境变量
     openai_key = os.getenv("OPENAI_API_KEY", "")
     openai_base = os.getenv("OPENAI_BASE_URL", "")
     result["env"] = {
-        "OPENAI_API_KEY": f"{openai_key[:12]}..." if openai_key else "❌ 未配置",
-        "OPENAI_BASE_URL": openai_base if openai_base else "❌ 未配置（将直连 OpenAI 官方地址）",
-        "DATABASE_URL": "✅ 已配置" if os.getenv("DATABASE_URL") else "❌ 未配置",
+        "OPENAI_API_KEY": f"{openai_key[:12]}..." if openai_key else "未配置",
+        "OPENAI_BASE_URL": openai_base if openai_base else "未配置（将直连 OpenAI 官方地址）",
+        "DATABASE_URL": "已配置" if os.getenv("DATABASE_URL") else "未配置",
     }
 
     # 2. 检查向量检索服务是否可用
-    result["embedding_service"] = "✅ 可用" if knowledge_service.is_available() else "❌ 不可用（OPENAI_API_KEY 缺失或初始化失败）"
+    result["embedding_service"] = "可用" if knowledge_service.is_available() else "不可用（OPENAI_API_KEY 缺失或初始化失败）"
 
     # 3. 检查数据库中的知识切片数量
     try:
@@ -376,10 +379,10 @@ def diagnose_knowledge_env(db: Session = Depends(get_db)):
         result["database"] = {
             "total_chunks": total_chunks,
             "by_channel": {row[0]: row[1] for row in channel_stats},
-            "status": "✅ 连接正常",
+            "status": "连接正常",
         }
     except Exception as e:
-        result["database"] = {"status": f"❌ 连接失败: {str(e)}"}
+        result["database"] = {"status": f"连接失败: {str(e)}"}
 
     # 4. 尝试一次实际的向量检索（小样本测试）
     if knowledge_service.is_available():
@@ -390,12 +393,12 @@ def diagnose_knowledge_env(db: Session = Depends(get_db)):
                 limit=1,
             )
             result["search_test"] = {
-                "status": "✅ 向量检索正常",
+                "status": "向量检索正常",
                 "found": len(test_results),
             }
         except Exception as e:
-            result["search_test"] = {"status": f"❌ 向量检索失败: {str(e)}"}
+            result["search_test"] = {"status": f"向量检索失败: {str(e)}"}
     else:
-        result["search_test"] = {"status": "⏭ 跳过（向量服务不可用）"}
+        result["search_test"] = {"status": "跳过（向量服务不可用）"}
 
     return result
