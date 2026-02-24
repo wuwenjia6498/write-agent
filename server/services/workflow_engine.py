@@ -930,15 +930,15 @@ class WorkflowEngine:
         user_feedback: str = ""
     ) -> Dict[str, Any]:
         """
-        Step 7: 初稿创作（v4.5 - 样文原文驱动 + 调研事实地基 + RAG 知识注入 + 用户补充）
+        Step 7: 初稿创作（v5.0 - 相关性匹配 + 掐头取尾 + XML 隔离 + RAG 知识注入）
         
-        降维重构：
-        - 不再使用 6 维特征/标签/style_profile
-        - 随机抽取 1-2 篇样文的标题+前 1000 字作为【排版与语气参考样文】
-        - 通过原文直接让大模型感知行文风格
-        - 如果用户在 Step 4 提供了补充信息，注入到 prompt 中
+        v5.0 三项改造：
+        - 废弃 random.sample 盲抽，基于选题关键词相关性评分抽取 Top 2 样文
+        - 掐头取尾黄金比例截取（前 700 字 + 后 300 字），保留开篇节奏与结尾升华
+        - XML 边界隔离格式包裹样文，附严厉防抄袭警告
         """
         import random
+        import re
         
         channel_config = self.load_channel_config(channel_id)
         
@@ -948,7 +948,7 @@ class WorkflowEngine:
         banned_books_list = '、'.join(banned_books.get('list', []))
         
         # ================================================================
-        # v4.5: 随机抽取 1-2 篇样文原文
+        # v5.0: 基于选题相关性的智能样文抽取 + 掐头取尾截取 + XML 边界隔离
         # ================================================================
         channel_data = db_service.get_channel_by_slug(channel_id)
         all_samples = []
@@ -958,20 +958,57 @@ class WorkflowEngine:
         sample_section = ""
         picked_samples = []
         if all_samples:
+            # --- 改造 1: 轻量级文本相关性评分，替代 random.sample ---
+            topic_keywords = set(re.findall(r'[\u4e00-\u9fff]{2,}', selected_topic))
+            
+            scored_samples = []
+            for s in all_samples:
+                score = 0
+                title = s.get('title') or ''
+                content = s.get('content') or ''
+                haystack = title + content[:500]
+                for kw in topic_keywords:
+                    score += haystack.count(kw)
+                scored_samples.append((score, s))
+            
+            scored_samples.sort(key=lambda x: x[0], reverse=True)
+            
             pick_count = min(len(all_samples), 2)
-            picked_samples = random.sample(all_samples, pick_count)
+            if scored_samples[0][0] > 0:
+                picked_samples = [item[1] for item in scored_samples[:pick_count]]
+            else:
+                picked_samples = random.sample(all_samples, pick_count)
             
-            sample_section = "## 【排版与语气参考样文】\n"
-            sample_section += "> 请仔细阅读并体会以下参考样文的行文节奏、段落长短、语气语调（如：温润亲切或专业客观）。\n"
-            sample_section += "> 在接下来的创作中，请**严格模仿这种风格**进行输出，但绝不要照抄样文的具体业务内容。\n\n"
+            # --- 改造 2: 掐头取尾黄金比例截取 ---
+            def smart_truncate(text: str, head: int = 700, tail: int = 300) -> str:
+                """超过 head+tail 字时截取首尾，保留开篇节奏与结尾升华"""
+                if not text or len(text) <= head + tail:
+                    return text
+                return (
+                    text[:head]
+                    + "\n\n......[中间部分已省略，重点学习文章开头和结尾的升华语调]......\n\n"
+                    + text[-tail:]
+                )
             
+            # --- 改造 3: XML 边界隔离格式 ---
+            sample_parts = []
             for i, s in enumerate(picked_samples, 1):
-                content_preview = (s.get('content') or '')[:1000]
-                sample_section += f"### 参考样文 {i}：《{s['title']}》\n"
-                sample_section += f"{content_preview}\n"
-                if len(s.get('content', '')) > 1000:
-                    sample_section += "……（已截取前 1000 字）\n"
-                sample_section += "\n"
+                content_preview = smart_truncate(s.get('content') or '')
+                sample_parts.append(
+                    f'  <sample index="{i}">\n'
+                    f'    <title>《{s["title"]}》</title>\n'
+                    f'    <content>{content_preview}</content>\n'
+                    f'  </sample>'
+                )
+            
+            sample_section = (
+                '<style_reference_samples>\n'
+                + '\n'.join(sample_parts)
+                + '\n</style_reference_samples>\n\n'
+                '⚠️ 请仔细分析 <style_reference_samples> 内的行文骨架、节奏和语气。'
+                '绝对禁止照抄 <content> 中的任何具体事实、人名或案例。'
+                '它们仅作为排版和语气的模具！\n\n'
+            )
         
         # ================================================================
         # 构建 System Prompt（v4.5 聚焦样文原文模仿）
@@ -991,13 +1028,13 @@ class WorkflowEngine:
         has_knowledge = bool(knowledge_summary and knowledge_summary.strip())
         has_internal = bool(internal_knowledge and internal_knowledge.strip())
         
-        think_aloud = f"✍️ 开始创作初稿 (v4.5 样文原文驱动)...\n\n"
+        think_aloud = f"✍️ 开始创作初稿 (v5.0 相关性匹配 + XML 隔离)...\n\n"
         think_aloud += f"📍 频道：{channel_config['channel_name']}\n"
         think_aloud += f"📍 字数要求：{word_count}字\n"
         
         if picked_samples:
             titles = '、'.join([f"《{s['title']}》" for s in picked_samples])
-            think_aloud += f"📍 参考样文：{titles}（随机抽取 {len(picked_samples)} 篇）\n"
+            think_aloud += f"📍 参考样文：{titles}（相关性匹配 Top {len(picked_samples)} 篇）\n"
         else:
             think_aloud += "📍 参考样文：无（将仅依赖频道基础调性）\n"
         
@@ -1098,7 +1135,7 @@ class WorkflowEngine:
         return {
             "output": result,
             "think_aloud": think_aloud,
-            # 将本次随机抽中的样文标题传递给路由层，以便保存到 brief_data
+            # 将本次匹配到的样文标题传递给路由层，以便保存到 brief_data
             "selected_samples": [{"id": str(s["id"]), "title": s["title"]} for s in picked_samples]
         }
     
