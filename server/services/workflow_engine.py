@@ -5,6 +5,8 @@
 
 from typing import Dict, Any, Optional, List
 import json
+import re
+import random
 from pathlib import Path
 from .ai_service import ai_service
 from .db_service import db_service
@@ -221,7 +223,6 @@ class WorkflowEngine:
         }
         
         # 按二级标题分割
-        import re
         sections = re.split(r'\n## ', content)
         
         for section in sections[1:]:  # 跳过第一个（标题前的内容）
@@ -572,7 +573,7 @@ class WorkflowEngine:
         
         # 从配置文件加载禁用书目
         banned_books = writing_constraints.get('banned_books', {})
-        banned_books_list = ''.join(banned_books.get('list', []))
+        banned_books_list = '、'.join(banned_books.get('list', []))
         banned_books_hint = banned_books.get('replacement_hint', '请选择更小众但同样优质的作品')
         
         system_prompt = f"""{channel_config['system_prompt']['role']}
@@ -730,7 +731,7 @@ class WorkflowEngine:
         降维重构：
         - 不再进行 6 维特征分析或智能匹配
         - 仅展示当前频道可用样文数量
-        - Step 7 将随机抽取 1-2 篇样文的原文作为排版与语气参考
+        - Step 7 将基于选题关键词相关性评分抽取 Top 2 样文作为排版与语气参考
         """
         channel_config = self.load_channel_config(channel_id)
         
@@ -747,7 +748,7 @@ class WorkflowEngine:
             think_aloud += f"\n[样文库] ✓ 找到 {len(all_samples)} 篇样文\n"
             for i, s in enumerate(all_samples, 1):
                 think_aloud += f"  {i}. 《{s['title']}》({s.get('word_count', 0)} 字)\n"
-            think_aloud += "\n→ Step 7 创作时将随机抽取 1-2 篇作为排版与语气参考\n"
+            think_aloud += "\n→ Step 7 创作时将基于选题相关性智能抽取 Top 2 篇作为排版与语气参考\n"
         else:
             think_aloud += "\n[样文库] ⚠ 该频道暂无样文，Step 7 将仅依赖频道基础调性\n"
         
@@ -755,7 +756,7 @@ class WorkflowEngine:
         
         style_guide = f"""## 本篇创作风格指引
 
-**可用样文**：{len(all_samples)} 篇（Step 7 将随机抽取 1-2 篇作为排版与语气参考）
+**可用样文**：{len(all_samples)} 篇（Step 7 将基于选题相关性智能抽取 Top 2 篇作为排版与语气参考）
 
 ## 创作要求
 1. **严格模仿参考样文的行文节奏、段落长短、语气语调**
@@ -784,7 +785,6 @@ class WorkflowEngine:
                       '一个', '我们', '他们', '什么', '怎么', '如何', '为什么'}
         
         # 简单分词（按标点和空格）
-        import re
         words = re.split(r'[，。、！？：；""''（）\s]+', text)
         
         # 过滤停用词和短词
@@ -796,84 +796,6 @@ class WorkflowEngine:
         # 取前10个关键词
         return keywords[:10]
     
-    async def _summarize_material(self, material: Dict[str, Any], topic: str) -> Dict[str, Any]:
-        """
-        对长文素材生成摘要和关键点（v3.7 新增）
-        
-        功能：
-        1. 提取核心论点和关键观点
-        2. 识别可引用的具体案例/数据
-        3. 生成简洁的摘要（便于 AI 理解和运用）
-        
-        Args:
-            material: 素材字典，包含 content, material_type, source 等
-            topic: 当前创作的选题，用于关联性分析
-            
-        Returns:
-            包含摘要信息的素材字典
-        """
-        content = material.get('content', '')
-        material_type = material.get('material_type', '其他')
-        source = material.get('source', '')
-        
-        # 只对超过 500 字的长文素材生成摘要
-        if len(content) < 500:
-            material['summary'] = content[:200] + '...' if len(content) > 200 else content
-            material['key_points'] = []
-            return material
-        
-        # 构建摘要提取 Prompt
-        summary_prompt = f"""请分析以下{material_type}素材，提取与当前选题相关的核心信息。
-
-【当前选题】
-{topic}
-
-【素材内容】（{len(content)}字）
-{content[:3000]}  # 限制输入长度
-
-【输出要求】
-请用以下格式输出（每项不超过50字）：
-
-**核心观点**：（一句话概括该素材的核心论点）
-
-**关键要点**：
-1. （要点1）
-2. （要点2）
-3. （要点3）
-
-**可引用内容**：（如有具体案例、数据、金句，列出1-2条最有价值的）
-
-**与选题关联**：（说明该素材如何服务于当前选题）"""
-
-        try:
-            summary_result = await ai_service.generate_content(
-                system_prompt="你是一位专业的内容分析师，擅长从长文档中提取核心信息和可引用素材。请简洁、精准地输出。",
-                user_message=summary_prompt,
-                temperature=0.3,
-                max_tokens=800
-            )
-            
-            # 解析摘要结果
-            material['ai_summary'] = summary_result
-            material['is_summarized'] = True
-            
-            # 提取关键要点（简单解析）
-            key_points = []
-            if '关键要点' in summary_result:
-                import re
-                points = re.findall(r'\d+[.、](.+?)(?=\d+[.、]|可引用|与选题|$)', summary_result, re.DOTALL)
-                key_points = [p.strip()[:100] for p in points if p.strip()][:3]
-            material['key_points'] = key_points
-            
-        except Exception as e:
-            print(f"[WARN] 素材摘要生成失败: {e}")
-            # 回退：使用简单截断
-            material['ai_summary'] = None
-            material['summary'] = content[:300] + '...'
-            material['key_points'] = []
-        
-        return material
-    
     def _extract_topic_from_brief(self, brief_analysis: str) -> str:
         """
         从需求分析中提取主题关键词用于搜索
@@ -884,8 +806,6 @@ class WorkflowEngine:
         Returns:
             适合搜索的主题关键词字符串
         """
-        import re
-        
         # 尝试从结构化分析中提取主题
         topic_match = re.search(r'主题[：:]\s*(.+?)(?:\n|$)', brief_analysis)
         if topic_match:
@@ -906,12 +826,16 @@ class WorkflowEngine:
     
     async def execute_step_6(self) -> Dict[str, Any]:
         """
-        Step 6: 创作准备（自动流转，无需用户操作）
-        整合 RAG 检索事实与标杆样文特征，为 Step 7 初稿创作封装上下文。
-        """
-        think_aloud = "[系统自动流转] 真实素材与风格特征已封装完毕，直接启动初稿生成。"
+        Step 6: 创作准备（自动流转占位步骤，无需用户操作）
         
-        result = "创作上下文已自动封装，系统已整合 RAG 检索事实与标杆样文特征，无缝切入初稿创作阶段。"
+        说明：
+        - 本步骤为流程架构中的占位步骤，不执行实际逻辑
+        - RAG 知识注入与样文抽取均在 Step 7 中统一完成
+        - 保留此步骤是为了保持 9 步 SOP 编号的连续性与前端流程展示
+        """
+        think_aloud = "[系统自动流转] Step 6 为占位步骤，直接跳转至 Step 7 初稿创作。"
+        
+        result = "创作准备完成，系统将直接进入 Step 7 初稿创作阶段。"
         
         return {
             "output": result,
@@ -937,9 +861,6 @@ class WorkflowEngine:
         - 掐头取尾黄金比例截取（前 700 字 + 后 300 字），保留开篇节奏与结尾升华
         - XML 边界隔离格式包裹样文，附严厉防抄袭警告
         """
-        import random
-        import re
-        
         channel_config = self.load_channel_config(channel_id)
         
         # 动态读取全局禁用书目
@@ -1011,7 +932,7 @@ class WorkflowEngine:
             )
         
         # ================================================================
-        # 构建 System Prompt（v4.5 聚焦样文原文模仿）
+        # 构建 System Prompt（v5.0 聚焦样文原文模仿 + 相关性抽取 + XML 隔离）
         # ================================================================
         system_prompt = f"""{channel_config['system_prompt']['role']}
 
@@ -1143,8 +1064,7 @@ class WorkflowEngine:
         self, 
         draft: str, 
         channel_id: str, 
-        word_count: int = 1500,
-        style_profile: Dict[str, Any] = None  # 风格画像
+        word_count: int = 1500
     ) -> Dict[str, Any]:
         """
         Step 8: 纪律审校机制（v3.7 - 接管所有禁令检查）
@@ -1163,7 +1083,7 @@ class WorkflowEngine:
         
         # 从配置文件加载禁用书目
         banned_books_config = writing_constraints.get('banned_books', {})
-        banned_books_list = ''.join(banned_books_config.get('list', []))
+        banned_books_list = '、'.join(banned_books_config.get('list', []))
         banned_books_hint = banned_books_config.get('replacement_hint', '请选择更小众但同样优质的作品')
         
         # 计算当前草稿字数（允许 ±10% 偏差）

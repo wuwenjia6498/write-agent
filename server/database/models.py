@@ -143,11 +143,11 @@ class Channel(Base):
         comment="标杆样文列表，每篇包含 {id, title, content, source, added_at}"
     )
     
-    # 风格画像 (由 Step 5 生成)
+    # 风格画像（历史遗留字段，v4.5 后 Step 5 不再生成，保留供未来扩展）
     style_profile = Column(
         JSONB,
         nullable=True,
-        comment="AI 解析生成的风格画像，包含 6 大维度分析结果"
+        comment="频道级风格画像 (历史遗留)，v4.5 后 Step 5 已简化为极简模式"
     )
     
     # 状态与时间戳
@@ -193,19 +193,20 @@ class StyleSample(Base):
     
     设计说明：
     - 从 Channel.style_samples (JSONB) 迁移为独立表
-    - 每篇样文独立存储 6 维特征分析结果 (style_profile)
-    - 支持主编自定义标签 (custom_tags) 用于智能匹配
+    - Step 7 v5.0 基于选题关键词相关性评分抽取 Top 2 样文，掐头取尾截取后以 XML 隔离注入
+    - style_profile 字段为历史遗留（v4.5 前由 Step 5 六维分析生成），现已不再写入新数据
+    - 支持主编自定义标签 (custom_tags) 用于管理
     
     Attributes:
         id: 样文唯一标识 (UUID)
         channel_id: 所属频道 (外键)
         title: 样文标题
-        content: 样文全文内容
+        content: 样文全文内容（Step 7 抽取时做掐头取尾截取）
         source: 来源说明
         custom_tags: 主编定义的风格标签 (JSONB 数组)，蓝色显示
         ai_suggested_tags: AI 建议的标签 (JSONB 数组)，灰色显示
-        style_profile: 6 维特征分析结果 (JSONB)
-        is_analyzed: 是否已完成 6 维分析
+        style_profile: 历史遗留字段，v4.5 后不再写入新数据
+        is_analyzed: 是否已完成分析（历史遗留）
         word_count: 字数统计
         created_at: 创建时间
         updated_at: 更新时间

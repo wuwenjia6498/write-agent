@@ -592,7 +592,7 @@ export default function ChannelsPage() {
                           样文
                         </CardTitle>
                         <CardDescription>
-                          创作时将随机抽取 1-2 篇作为排版与语气参考（最多 5 篇）
+                          创作时将基于选题相关性智能抽取 Top 2 篇作为排版与语气参考（最多 5 篇）
                         </CardDescription>
                       </div>
                       <Dialog open={isAddSampleDialogOpen} onOpenChange={setIsAddSampleDialogOpen}>

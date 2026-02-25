@@ -49,6 +49,11 @@ export default function ArticleEditor({
   const [copied, setCopied] = useState(false)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  // 浮层模式：AI 重写 or 手动替换
+  const [popoverMode, setPopoverMode] = useState<'ai' | 'manual'>('ai')
+  // 手动替换模式下用户编辑的文本（预填为选中原文）
+  const [manualText, setManualText] = useState('')
+
   // 浮层是否处于活跃状态（输入中 / 加载中 / 预览中）
   const isPopoverActive = !!(selection || isRewriting || suggestedText)
 
@@ -89,6 +94,8 @@ export default function ArticleEditor({
     setIsRewriting(false)
     setSuggestedText(null)
     setHighlightRange(null)
+    setPopoverMode('ai')
+    setManualText('')
   }, [])
 
   // ========================================================================
@@ -116,6 +123,33 @@ export default function ArticleEditor({
     },
     [taskId, contentType, showToast],
   )
+
+  // ========================================================================
+  // 手动替换：直接用 manualText 替换选区，不调用 AI
+  // ========================================================================
+  const handleManualAccept = useCallback(() => {
+    if (!selection) return
+    const trimmed = manualText  // 保留用户输入原样，不做 trim
+
+    const newContent =
+      content.slice(0, selection.startIndex) +
+      trimmed +
+      content.slice(selection.endIndex)
+
+    setHighlightRange({
+      start: selection.startIndex,
+      end: selection.startIndex + trimmed.length,
+    })
+
+    onContentChange?.(newContent)
+    setSelection(null)
+    setInstruction('')
+    setManualText('')
+    setPopoverMode('ai')
+
+    setTimeout(() => setHighlightRange(null), 2000)
+    silentSave(newContent)
+  }, [selection, manualText, content, onContentChange, silentSave])
 
   // ========================================================================
   // 划词：计算选区在纯文本中的精确索引（TreeWalker）
@@ -176,6 +210,8 @@ export default function ArticleEditor({
     setSelection({ text: selectedText, startIndex, endIndex, rect })
     setInstruction('')
     setSuggestedText(null)
+    setManualText(selectedText)  // 手动模式预填原文，方便在原基础上编辑
+    setPopoverMode('ai')         // 每次划词重置为默认 AI 模式
   }, [readOnly, isRewriting, suggestedText])
 
   // 点击其他区域关闭浮层（预览模式下不关闭）
@@ -339,7 +375,7 @@ export default function ArticleEditor({
         {!readOnly && showHint ? (
           <>
             <svg className="w-4 h-4 flex-shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="m15 4-1 1-9 9-3 4 4-3 9-9 1-1m-1 0 2.869-2.869a1.25 1.25 0 0 1 1.765 0l1.235 1.235a1.25 1.25 0 0 1 0 1.765L18 7m-3-3 3 3" /></svg>
-            <span className="flex-1"><strong className="font-semibold">AI 划词重写已启用</strong>：划选下方文章中的任意文字，即可唤起 AI 进行局部修改、精简或润色。</span>
+            <span className="flex-1"><strong className="font-semibold">划词编辑已启用</strong>：划选任意文字，可选择「AI 重写」或「手动替换」两种方式进行局部修改。</span>
           </>
         ) : (
           <span className="flex-1" />
@@ -396,40 +432,111 @@ export default function ArticleEditor({
       </div>
 
       {/* ================================================================
-       * 浮层：状态 A（输入模式）— 划词后弹出输入框 + 魔法棒按钮
+       * 浮层：状态 A（输入模式）— 划词后弹出，支持 AI 重写 / 手动替换 两种模式
        * ================================================================ */}
       {selection && !isRewriting && !suggestedText && (
         <div
           data-rewrite-popover
           style={getPopoverStyle()}
-          className="w-[460px] bg-white border border-gray-200 rounded-xl shadow-xl p-3 flex items-end gap-2.5 animate-in fade-in slide-in-from-top-2 duration-200"
+          className="w-[460px] bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
         >
-          <textarea
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                handleRewrite()
-              }
-              if (e.key === 'Escape') setSelection(null)
-            }}
-            placeholder="告诉 AI 怎么改，如：换个更口语化的表达..."
-            rows={2}
-            className="flex-1 text-sm px-3.5 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-gray-50 resize-none leading-relaxed"
-            autoFocus
-          />
-          <button
-            onClick={() => handleRewrite()}
-            disabled={!instruction.trim()}
-            className="flex-shrink-0 w-10 h-10 self-end flex items-center justify-center rounded-lg bg-[#3a5e98] hover:bg-[#2d4a78] text-white disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-            title="AI 重写"
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-              <path d="m15 4-1 1m0 0-9 9-3 4 4-3 9-9m-1-1 2.869-2.869a1.25 1.25 0 0 1 1.765 0l1.235 1.235a1.25 1.25 0 0 1 0 1.765L18 7m-3-3 3 3" />
-              <path d="m6 6 1.5-1.5M2 10l1.5-1.5M10 2l-1.5 1.5" />
-            </svg>
-          </button>
+          {/* 模式切换标签栏 */}
+          <div className="flex border-b border-gray-100">
+            <button
+              onClick={() => setPopoverMode('ai')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
+                popoverMode === 'ai'
+                  ? 'text-[#3a5e98] border-b-2 border-[#3a5e98] bg-blue-50/40'
+                  : 'text-slate-400 hover:text-slate-600 hover:bg-gray-50'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="m15 4-1 1m0 0-9 9-3 4 4-3 9-9m-1-1 2.869-2.869a1.25 1.25 0 0 1 1.765 0l1.235 1.235a1.25 1.25 0 0 1 0 1.765L18 7m-3-3 3 3" />
+              </svg>
+              AI 重写
+            </button>
+            <button
+              onClick={() => setPopoverMode('manual')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors ${
+                popoverMode === 'manual'
+                  ? 'text-slate-700 border-b-2 border-slate-600 bg-slate-50/60'
+                  : 'text-slate-400 hover:text-slate-600 hover:bg-gray-50'
+              }`}
+            >
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+              </svg>
+              手动替换
+            </button>
+          </div>
+
+          {/* AI 重写模式 */}
+          {popoverMode === 'ai' && (
+            <div className="p-3 flex items-end gap-2.5">
+              <textarea
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    handleRewrite()
+                  }
+                  if (e.key === 'Escape') resetPopover()
+                }}
+                placeholder="告诉 AI 怎么改，如：换个更口语化的表达..."
+                rows={2}
+                className="flex-1 text-sm px-3.5 py-2.5 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-400 focus:border-transparent bg-gray-50 resize-none leading-relaxed"
+                autoFocus
+              />
+              <button
+                onClick={() => handleRewrite()}
+                disabled={!instruction.trim()}
+                className="flex-shrink-0 w-10 h-10 self-end flex items-center justify-center rounded-lg bg-[#3a5e98] hover:bg-[#2d4a78] text-white disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
+                title="AI 重写（Enter 快速触发）"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="m15 4-1 1m0 0-9 9-3 4 4-3 9-9m-1-1 2.869-2.869a1.25 1.25 0 0 1 1.765 0l1.235 1.235a1.25 1.25 0 0 1 0 1.765L18 7m-3-3 3 3" />
+                  <path d="m6 6 1.5-1.5M2 10l1.5-1.5M10 2l-1.5 1.5" />
+                </svg>
+              </button>
+            </div>
+          )}
+
+          {/* 手动替换模式 */}
+          {popoverMode === 'manual' && (
+            <div className="p-3 flex flex-col gap-2.5">
+              <p className="text-xs text-slate-400 leading-relaxed">
+                直接修改下方文字，完成后点击「确认替换」即可：
+              </p>
+              <textarea
+                value={manualText}
+                onChange={(e) => setManualText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') resetPopover()
+                }}
+                rows={4}
+                className="w-full text-sm px-3.5 py-2.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-400 focus:border-transparent bg-gray-50 resize-none leading-relaxed"
+                autoFocus
+              />
+              <div className="flex gap-2">
+                <button
+                  onClick={handleManualAccept}
+                  disabled={!manualText.trim() || manualText === selection?.text}
+                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-slate-700 hover:bg-slate-800 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg transition-colors"
+                  title="直接替换为您输入的文字"
+                >
+                  ✅ 确认替换
+                </button>
+                <button
+                  onClick={resetPopover}
+                  className="flex-shrink-0 px-3 py-1.5 text-sm text-slate-500 bg-white border border-slate-200 hover:bg-red-50 hover:text-red-600 hover:border-red-200 rounded-lg transition-colors"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -448,20 +555,26 @@ export default function ArticleEditor({
       )}
 
       {/* ================================================================
-       * 浮层：状态 B（预览与决策模式）— 展示 suggestedText + 三按钮
+       * 浮层：状态 B（预览与决策模式）— 展示 AI 建议（可编辑）+ 三按钮
        * ================================================================ */}
-      {selection && suggestedText && !isRewriting && (
+      {selection && suggestedText !== null && !isRewriting && (
         <div
           data-rewrite-popover
           style={getPopoverStyle()}
           className="w-[460px] bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-2 duration-200"
         >
-          {/* 预览区 */}
+          {/* 可编辑预览区 */}
           <div className="px-4 pt-3 pb-2">
-            <p className="text-xs font-medium text-slate-500 mb-1.5">AI 建议替换为：</p>
-            <div className="bg-emerald-50 border border-emerald-200/60 rounded-lg px-3 py-2.5 max-h-[180px] overflow-y-auto">
-              <p className="text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">{suggestedText}</p>
-            </div>
+            <p className="text-xs font-medium text-slate-500 mb-1.5">
+              AI 建议替换为
+              <span className="ml-1.5 text-slate-400 font-normal">（可直接编辑后再替换）</span>
+            </p>
+            <textarea
+              value={suggestedText}
+              onChange={(e) => setSuggestedText(e.target.value)}
+              rows={5}
+              className="w-full text-sm px-3 py-2.5 bg-emerald-50 border border-emerald-200/80 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent resize-none leading-relaxed text-gray-800"
+            />
           </div>
 
           {/* 操作按钮 */}

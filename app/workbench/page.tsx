@@ -430,7 +430,7 @@ export default function WorkbenchPage() {
       setIsKnowledgeModified(false)
       setShowKnowledgeEditor(false)
       
-      // 恢复 Step 5 风格画像
+      // [历史遗留] 恢复 Step 5 风格画像 — v4.5 后 Step 5 不再生成 style_profile，此分支实际不会进入
       if (taskDetail.brief_data?.style_profile) {
         setStyleProfile(taskDetail.brief_data.style_profile)
         if (taskDetail.brief_data.style_profile.writing_guidelines) {
@@ -641,7 +641,7 @@ export default function WorkbenchPage() {
         setIsKnowledgeModified(false)
         setShowKnowledgeEditor(false)
       }
-      // Step 5 返回风格画像和分类素材
+      // [历史遗留] Step 5 风格画像 — v4.5 后 Step 5 返回 style_profile: null，此分支实际不会进入
       if (stepId === 5 && result.result?.style_profile) {
         const profile = result.result.style_profile
         setStyleProfile(profile)
@@ -1165,7 +1165,7 @@ export default function WorkbenchPage() {
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-medium text-slate-800">样文风格待锁定</p>
                               <p className="text-sm text-slate-500 mt-1">
-                                AI 将在 Step 7 初稿创作时，从以下 {allSamples.length} 篇样文中随机抽取 1–2 篇作为排版与语气参考：
+                                AI 将在 Step 7 初稿创作时，基于选题相关性从以下 {allSamples.length} 篇样文中智能抽取 Top 2 篇作为排版与语气参考：
                               </p>
                               <div className="mt-3 flex flex-col gap-2">
                                 {allSamples.map((s: any) => (

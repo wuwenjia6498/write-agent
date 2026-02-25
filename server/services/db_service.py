@@ -72,7 +72,7 @@ class DatabaseService:
             db.close()
     
     def update_channel_style_profile(self, channel_id: str, style_profile: Dict[str, Any]) -> bool:
-        """更新频道的风格画像"""
+        """更新频道的风格画像（已弃用：v4.5 后 Step 5 不再生成 style_profile，当前无调用方）"""
         db = self.get_db()
         try:
             from sqlalchemy.orm.attributes import flag_modified
@@ -1329,7 +1329,7 @@ class DatabaseService:
         ai_suggested_tags: Optional[List[str]] = None
     ) -> bool:
         """
-        更新样文的 6 维特征分析结果
+        更新样文的 6 维特征分析结果（已弃用：v4.5 后 Step 5 不再执行六维分析，当前无调用方）
         """
         db = self.get_db()
         try:

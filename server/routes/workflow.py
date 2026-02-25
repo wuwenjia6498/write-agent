@@ -403,13 +403,8 @@ async def execute_step(
                 task_id=task_id
             )
             
-            style_profile = result.get("style_profile", {})
-            classified_materials = result.get("classified_materials", {"long": [], "short": []})
             db_service.update_brief_data(task_id, {
                 "step_5_output": result["output"],
-                "retrieved_materials": result.get("retrieved_materials", []),
-                "classified_materials": classified_materials,
-                "style_profile": style_profile,
                 "selected_sample": result.get("selected_sample"),
                 "all_samples": result.get("all_samples", [])
             })
@@ -423,7 +418,7 @@ async def execute_step(
             db_service.add_think_aloud_log(task_id, 6, result["think_aloud"])
             
         elif step_id == 7:
-            # Step 7: 初稿创作（v4.5 - 样文原文驱动 + 调研事实地基 + 知识库统一 RAG）
+            # Step 7: 初稿创作（v5.0 - 相关性样文抽取 + 掐头取尾 + XML 隔离 + RAG 知识注入）
             if not selected_topic:
                 selected_topic = brief_data.get("selected_topic", "")
             
@@ -456,17 +451,15 @@ async def execute_step(
             db_service.add_think_aloud_log(task_id, 7, result["think_aloud"])
             
         elif step_id == 8:
-            # Step 8: 四遍审校（含风格对齐检查）
+            # Step 8: 四遍审校（纪律审校机制 v3.7）
             draft = task.get("draft_content") or brief_data.get("step_7_output", "")
-            # 优先使用用户自定义的风格配置
-            style_profile = brief_data.get("user_style_profile") or brief_data.get("style_profile", {})
             
             # 从 Step 1 的分析结果中提取字数要求
             step1_output = brief_data.get("step_1_output", "")
             original_brief = brief_data.get("brief", "")
             word_count = extract_word_count(step1_output, original_brief)
             
-            result = await workflow_engine.execute_step_8(draft, channel_id, word_count, style_profile)
+            result = await workflow_engine.execute_step_8(draft, channel_id, word_count)
             
             # 保存终稿
             db_service.update_task_step(
@@ -978,11 +971,11 @@ async def get_selected_samples(task_id: str):
 @router.post("/{task_id}/select-sample")
 async def select_sample(task_id: str, request: SelectSampleRequest):
     """
-    确认选择某篇样文作为本次创作的唯一标杆
+    确认选择某篇样文作为本次创作的参考标杆
     
-    选中后：
-    1. 该样文的 style_profile 将作为 Step 7 的强制约束
-    2. 若主编在 Step 5 微调了创作指南，则覆盖样文默认特征
+    说明：
+    1. 选中的样文信息将保存至 brief_data，供后续流程参考
+    2. Step 7 实际使用的样文由相关性评分智能抽取（v5.0），此处的选择作为优先偏好记录
     """
     task = db_service.get_task(task_id)
     if not task:
