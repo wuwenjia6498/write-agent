@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { CheckCircle2, FileText, Clock, Layers } from 'lucide-react'
 import Link from 'next/link'
@@ -39,7 +39,15 @@ interface PendingTask {
   brief: string | null  // 需求简述，用于显示任务名称
 }
 
-export default function WorkbenchPage() {
+export default function WorkbenchPageWrapper() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-50 flex items-center justify-center"><span className="text-gray-400">加载中...</span></div>}>
+      <WorkbenchPage />
+    </Suspense>
+  )
+}
+
+function WorkbenchPage() {
   const searchParams = useSearchParams()
   
   // 基础状态
