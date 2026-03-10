@@ -522,11 +522,29 @@ export default function ArticleEditor({
               <div className="flex gap-2">
                 <button
                   onClick={handleManualAccept}
-                  disabled={!manualText.trim() || manualText === selection?.text}
+                  disabled={manualText === selection?.text}
                   className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-slate-700 hover:bg-slate-800 disabled:bg-gray-300 disabled:cursor-not-allowed rounded-lg transition-colors"
                   title="直接替换为您输入的文字"
                 >
                   ✅ 确认替换
+                </button>
+                <button
+                  onClick={() => {
+                    if (!selection) return
+                    const newContent =
+                      content.slice(0, selection.startIndex) +
+                      content.slice(selection.endIndex)
+                    onContentChange?.(newContent)
+                    setSelection(null)
+                    setInstruction('')
+                    setManualText('')
+                    setPopoverMode('ai')
+                    silentSave(newContent)
+                  }}
+                  className="flex-shrink-0 flex items-center justify-center gap-1 px-3 py-1.5 text-sm font-medium text-red-600 bg-white border border-red-200 hover:bg-red-50 hover:border-red-300 rounded-lg transition-colors"
+                  title="直接删除选中的文字"
+                >
+                  🗑️ 删除
                 </button>
                 <button
                   onClick={resetPopover}

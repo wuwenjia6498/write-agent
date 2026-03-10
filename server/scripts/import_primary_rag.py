@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-脚本 B: 导入小学段文档到 RAG 知识库 (docx/pdf → KnowledgeChunk)
+脚本 B: 导入小学段文档到 RAG 知识库
 
 数据源目录:
-  - data_source/primary_school/lesson_plans/  → channel_scope='deep_reading', material_type='lesson_plan'
-  - data_source/primary_school/articles/      → channel_scope='deep_reading', material_type='article'
+  - server/data_source/cleaned_docs/  → 清洗后的阅读指导卡片 (.md)
+    channel_scope='deep_reading', material_type='lesson_plan'
 
-处理流程: 提取文本 → RecursiveCharacterTextSplitter 切片 → OpenAI Embedding → 入库
+处理流程: 读取 MD 文本 → RecursiveCharacterTextSplitter 切片 → OpenAI Embedding → 入库
 """
 
 import sys
@@ -15,27 +15,21 @@ import traceback
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from langchain_community.document_loaders import Docx2txtLoader
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from database.config import engine, SessionLocal
 from database.models import Base, KnowledgeChunk
 
-# 项目根目录
+# 项目根目录（server 的上级）
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 # 需要扫描的目录及其对应的 tag 配置
 DIRECTORY_CONFIG = [
     {
-        "path": os.path.join(PROJECT_ROOT, "data_source", "primary_school", "lesson_plans"),
+        "path": os.path.join(PROJECT_ROOT, "server", "data_source", "cleaned_docs"),
         "channel_scope": "deep_reading",
         "material_type": "lesson_plan",
-    },
-    {
-        "path": os.path.join(PROJECT_ROOT, "data_source", "primary_school", "articles"),
-        "channel_scope": "deep_reading",
-        "material_type": "article",
+        "extensions": (".md",),
     },
 ]
 
@@ -55,17 +49,23 @@ def init_table():
 
 def load_document(filepath: str) -> str:
     """
-    根据文件扩展名选择 Loader 提取文本
-    支持 .docx 和 .pdf
+    根据文件扩展名选择对应方式提取文本
+    支持 .md / .docx / .pdf
     """
     ext = os.path.splitext(filepath)[1].lower()
 
-    if ext == ".docx":
+    if ext == ".md":
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+
+    elif ext == ".docx":
+        from langchain_community.document_loaders import Docx2txtLoader
         loader = Docx2txtLoader(filepath)
         docs = loader.load()
         return "\n".join(doc.page_content for doc in docs)
 
     elif ext == ".pdf":
+        from langchain_community.document_loaders import PyPDFLoader
         loader = PyPDFLoader(filepath)
         docs = loader.load()
         return "\n".join(doc.page_content for doc in docs)
@@ -135,6 +135,7 @@ def process_directory(config: dict, embeddings_model: OpenAIEmbeddings) -> int:
     dir_path = config["path"]
     channel_scope = config["channel_scope"]
     material_type = config["material_type"]
+    extensions = config.get("extensions", (".md", ".docx", ".pdf"))
 
     if not os.path.isdir(dir_path):
         print(f"[WARN] 目录不存在，跳过: {dir_path}")
@@ -142,11 +143,11 @@ def process_directory(config: dict, embeddings_model: OpenAIEmbeddings) -> int:
 
     files = [
         f for f in os.listdir(dir_path)
-        if os.path.splitext(f)[1].lower() in (".docx", ".pdf")
+        if os.path.splitext(f)[1].lower() in extensions
     ]
 
     if not files:
-        print(f"[WARN] 目录为空（无 .docx/.pdf 文件）: {dir_path}")
+        print(f"[WARN] 目录为空（无匹配文件）: {dir_path}")
         return 0
 
     print(f"\n[INFO] 扫描目录: {dir_path}")

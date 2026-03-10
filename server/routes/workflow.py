@@ -149,8 +149,9 @@ class ConfirmStepRequest(BaseModel):
     # Step 2: 调研确认
     knowledge_confirmed: Optional[bool] = Field(None, description="调研确认 (Step 2)")
     edited_knowledge: Optional[str] = Field(None, description="用户编辑后的调研内容 (Step 2)")
-    # Step 3: 选题确认
-    selected_topic: Optional[str] = Field(None, description="选定的选题 (Step 3)")
+    # Step 3: 选题确认（支持双选题分叉）
+    selected_topic: Optional[str] = Field(None, description="选定的主选题 (Step 3)")
+    forked_topic: Optional[str] = Field(None, description="第二选题，系统将自动创建分叉任务 (Step 3)")
     # Step 4: 协作文档确认
     user_supplement: Optional[str] = Field(None, description="用户补充信息 (Step 4)")
 
@@ -170,13 +171,10 @@ async def create_workflow(request: CreateWorkflowRequest):
     - 包含重试机制应对临时网络问题
     - 返回任务 ID 供后续操作使用
     """
-    # 如果没有标题，从 brief 中自动生成
+    # 如果没有标题，用完整 brief 作为标题（前端负责视觉截断）
     title = request.title
     if not title and request.brief:
-        # 提取 brief 前50个字符作为标题，去除换行
-        title = request.brief.replace('\n', ' ').strip()[:50]
-        if len(request.brief) > 50:
-            title += '...'
+        title = request.brief.replace('\n', ' ').strip()
     
     brief_data = {
         "brief": request.brief,
@@ -451,23 +449,71 @@ async def execute_step(
             db_service.add_think_aloud_log(task_id, 7, result["think_aloud"])
             
         elif step_id == 8:
-            # Step 8: 四遍审校（纪律审校机制 v3.7）
+            # Step 8: 纪律审校 v4.0（文章与报告分离输出）
             draft = task.get("draft_content") or brief_data.get("step_7_output", "")
             
-            # 从 Step 1 的分析结果中提取字数要求
             step1_output = brief_data.get("step_1_output", "")
             original_brief = brief_data.get("brief", "")
             word_count = extract_word_count(step1_output, original_brief)
             
             result = await workflow_engine.execute_step_8(draft, channel_id, word_count)
+            raw_output = result["output"]
             
-            # 保存终稿
+            # 解析分离：修改后文章 vs 审校报告
+            final_article = raw_output
+            audit_report = ""
+            
+            if "===FINAL_ARTICLE_START===" in raw_output and "===FINAL_ARTICLE_END===" in raw_output:
+                start = raw_output.index("===FINAL_ARTICLE_START===") + len("===FINAL_ARTICLE_START===")
+                end = raw_output.index("===FINAL_ARTICLE_END===")
+                final_article = raw_output[start:end].strip()
+            
+            if "===AUDIT_REPORT_START===" in raw_output and "===AUDIT_REPORT_END===" in raw_output:
+                r_start = raw_output.index("===AUDIT_REPORT_START===") + len("===AUDIT_REPORT_START===")
+                r_end = raw_output.index("===AUDIT_REPORT_END===")
+                audit_report = raw_output[r_start:r_end].strip()
+            elif "===FINAL_ARTICLE_END===" in raw_output:
+                audit_report = raw_output[raw_output.index("===FINAL_ARTICLE_END===") + len("===FINAL_ARTICLE_END==="):].strip()
+            
+            # 程序化正则复核：扫描 AI 审校后终稿中的残留违禁句式
+            import re
+            forbidden_patterns = [
+                (r'不是.*?而是', '不是…而是…'),
+                (r'不在.*?而在', '不在…而在…'),
+                (r'而不是', '而不是'),
+                (r'不要.*?而是', '不要…而是…'),
+                (r'不仅仅是.*?更是', '不仅仅是…更是…'),
+            ]
+            regex_findings = []
+            for pattern, label in forbidden_patterns:
+                for m in re.finditer(pattern, final_article):
+                    ctx_start = max(0, m.start() - 10)
+                    ctx_end = min(len(final_article), m.end() + 10)
+                    context = final_article[ctx_start:ctx_end].replace('\n', ' ')
+                    regex_findings.append(f"  - [{label}] …{context}…")
+            
+            if regex_findings:
+                regex_note = (
+                    "\n\n---\n⚠️ **程序化复核**（正则扫描发现 AI 审校遗漏）：\n"
+                    f"终稿中仍残留 {len(regex_findings)} 处违禁句式：\n"
+                    + "\n".join(regex_findings)
+                    + "\n\n请在终稿中手动修改以上残留，或重新执行审校。"
+                )
+                audit_report += regex_note
+            
             db_service.update_task_step(
                 task_id, 8, "processing",
-                final_content=result["output"]
+                final_content=final_article
             )
-            db_service.update_brief_data(task_id, {"step_8_output": result["output"]})
+            db_service.update_brief_data(task_id, {
+                "step_8_output": final_article,
+                "step_8_audit_report": audit_report
+            })
             db_service.add_think_aloud_log(task_id, 8, result["think_aloud"])
+            
+            # 将纯净文章覆盖 result.output，并附带 audit_report 供前端直接读取
+            result["output"] = final_article
+            result["audit_report"] = audit_report
             
         elif step_id == 9:
             # Step 9: 文章配图
@@ -572,18 +618,52 @@ async def confirm_checkpoint(task_id: str, request: ConfirmStepRequest):
     if updates:
         db_service.update_brief_data(task_id, updates)
     
+    # 选题分叉：如果用户同时选了第二个选题，克隆一个新任务
+    forked_task = None
+    print(f"[DEBUG 分叉] current_step={current_step}, has_forked_topic={bool(request.forked_topic)}, forked_topic_len={len(request.forked_topic) if request.forked_topic else 0}")
+    if current_step == 3 and request.forked_topic and request.forked_topic.strip():
+        # 提取第二选题的标题（取第一行作为标题）
+        forked_title_line = request.forked_topic.strip().split('\n')[0]
+        forked_title = forked_title_line.replace('#', '').replace('*', '').strip()[:80]
+        print(f"[DEBUG 分叉] 准备克隆, forked_title={forked_title}")
+        
+        forked_task = db_service.clone_task_for_topic(
+            source_task_id=task_id,
+            new_topic=request.forked_topic,
+            new_title=forked_title
+        )
+        print(f"[DEBUG 分叉] clone_task_for_topic 返回: {forked_task is not None}")
+        if forked_task:
+            db_service.add_think_aloud_log(
+                task_id, 3,
+                f"[系统] 已为第二选题创建分叉任务: {forked_task['title']} (ID: {forked_task['id'][:8]}...)"
+            )
+        else:
+            print(f"[ERROR 分叉] clone_task_for_topic 返回 None! source_task_id={task_id}")
+    elif current_step == 3:
+        print(f"[DEBUG 分叉] 无第二选题，不创建分叉")
+    
     # 更新状态，继续执行
     db_service.confirm_and_continue(task_id, {
         "confirmed_at": datetime.now().isoformat(),
         "step": current_step
     })
     
-    return {
+    response = {
         "success": True,
         "message": "确认成功，继续执行下一步",
         "next_step": current_step + 1,
         "task_id": task_id
     }
+    
+    if forked_task:
+        response["forked_task"] = {
+            "task_id": forked_task["id"],
+            "title": forked_task["title"],
+            "message": f"已为第二选题「{forked_task['title']}」创建新任务，可在任务列表中查看"
+        }
+    
+    return response
 
 
 @router.post("/{task_id}/regenerate-summary")

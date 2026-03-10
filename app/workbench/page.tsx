@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { CheckCircle2, FileText, Clock, Layers } from 'lucide-react'
 import Link from 'next/link'
 import Image from 'next/image'
@@ -39,6 +40,8 @@ interface PendingTask {
 }
 
 export default function WorkbenchPage() {
+  const searchParams = useSearchParams()
+  
   // 基础状态
   const [selectedChannel, setSelectedChannel] = useState<string>('')
   const [workflowStarted, setWorkflowStarted] = useState(false)
@@ -62,6 +65,10 @@ export default function WorkbenchPage() {
   
   // 查看模式：用于查看历史步骤输出
   const [viewingStep, setViewingStep] = useState<number | null>(null)
+  
+  // Step 8 审校报告（与终稿分离显示）
+  const [auditReport, setAuditReport] = useState<string>('')
+  const [auditReportExpanded, setAuditReportExpanded] = useState(false)
   
   // 风格画像（Step 5 生成）
   const [styleProfile, setStyleProfile] = useState<any>(null)
@@ -94,9 +101,13 @@ export default function WorkbenchPage() {
   // Step 2: 展开全部来源
   const [showAllSources, setShowAllSources] = useState(false)
   
-  // Step 3: 选题展开状态
+  // Step 3: 选题展开状态 + 多选
   const [expandedTopics, setExpandedTopics] = useState<Record<number | string, boolean>>({})
   const [copiedTopicIndex, setCopiedTopicIndex] = useState<number | null>(null)
+  const [selectedTopicIndices, setSelectedTopicIndices] = useState<number[]>([])
+  const topicBlocksRef = useRef<{ title: string; content: string }[]>([])
+  const [forkedTaskToast, setForkedTaskToast] = useState<{ taskId: string; title: string } | null>(null)
+  const [forkedTaskInfo, setForkedTaskInfo] = useState<{ taskId: string; title: string } | null>(null)
   
   // v3.5: 样文推荐（Smart Match）
   const [recommendedSample, setRecommendedSample] = useState<any>(null)
@@ -111,6 +122,7 @@ export default function WorkbenchPage() {
   const [pendingTasks, setPendingTasks] = useState<PendingTask[]>([])
   const [showResumeModal, setShowResumeModal] = useState(false)
   const [loadingTasks, setLoadingTasks] = useState(false)
+  const [loadingFromUrl, setLoadingFromUrl] = useState(!!searchParams.get('task'))
   
   // ============================================================================
   // 中止任务
@@ -326,6 +338,9 @@ export default function WorkbenchPage() {
       if (updatedTask.final_content) {
         outputs[8] = updatedTask.final_content
       }
+      if (updatedTask.brief_data?.step_8_audit_report) {
+        setAuditReport(updatedTask.brief_data.step_8_audit_report)
+      }
       setStepOutputs(outputs)
     })
     
@@ -410,6 +425,9 @@ export default function WorkbenchPage() {
       if (taskDetail.final_content) {
         outputs[8] = taskDetail.final_content
       }
+      if (taskDetail.brief_data?.step_8_audit_report) {
+        setAuditReport(taskDetail.brief_data.step_8_audit_report)
+      }
       setStepOutputs(outputs)
       
       // 恢复 Think Aloud 日志
@@ -467,6 +485,37 @@ export default function WorkbenchPage() {
     }
   }
   
+  // URL 参数自动加载任务（用于选题分叉的"在新标签页中打开"）
+  useEffect(() => {
+    const taskParam = searchParams.get('task')
+    if (taskParam && !taskId && !workflowStarted) {
+      setLoadingFromUrl(true)
+      ;(async () => {
+        try {
+          const res = await fetch(`${API_BASE}/tasks/${taskParam}`)
+          if (!res.ok) return
+          const task = await res.json()
+          if (task) {
+            await handleResumeTask({
+              id: task.id,
+              title: task.title,
+              channel_slug: task.channel_slug,
+              current_step: task.current_step,
+              status: task.status,
+              created_at: task.created_at,
+              updated_at: task.updated_at,
+              brief: task.brief_data?.brief || null
+            })
+          }
+        } catch (e) {
+          console.error('从 URL 参数加载任务失败:', e)
+        } finally {
+          setLoadingFromUrl(false)
+        }
+      })()
+    }
+  }, [searchParams])
+
   // 格式化步骤输出用于显示（与任务详情页保持一致）
   const formatStepOutputForDisplay = (output: any, stepId: number): string => {
     if (typeof output === 'string') return output
@@ -678,6 +727,11 @@ export default function WorkbenchPage() {
       if (result.final_content) {
         setStepOutputs(prev => ({ ...prev, 8: result.final_content }))
       }
+      if (result.result?.audit_report) {
+        setAuditReport(result.result.audit_report)
+      } else if (result.brief_data?.step_8_audit_report) {
+        setAuditReport(result.brief_data.step_8_audit_report)
+      }
       
       // 更新 Think Aloud
       if (result.result?.think_aloud) {
@@ -697,7 +751,10 @@ export default function WorkbenchPage() {
       
       // 更新当前步骤
       if (result.next_step) {
-        setCurrentStep(result.next_step)
+        // Step 8 完成后保持在 Step 8 展示终稿和审校报告，Step 9 在后台执行
+        if (stepId !== 8) {
+          setCurrentStep(result.next_step)
+        }
         
         // 自动执行下一步（非卡点）
         if (!result.is_checkpoint && result.next_step <= 9) {
@@ -792,28 +849,94 @@ export default function WorkbenchPage() {
         executeStep(taskId, 3)
         return
       }
-      // Step 3: 选题确认
+      // Step 3: 选题确认（支持双选题分叉）
       else if (currentStep === 3) {
-        if (!selectedTopic.trim()) {
-          alert('请在下方输入框中粘贴你选择的选题内容')
+        if (selectedTopicIndices.length === 0) {
+          alert('请点击选题卡片左侧的圆圈，至少选择 1 个选题')
           setIsExecuting(false)
           return
         }
         
-        // 调用确认接口
+        // 优先复用渲染时的 topicBlocks（ref），若为空则从 stepOutputs 重新解析（兜底）
+        let topicBlocks = topicBlocksRef.current
+        if (!topicBlocks || topicBlocks.length === 0) {
+          console.warn('[Step3 确认] topicBlocksRef 为空，从 stepOutputs 重新解析')
+          const raw = stepOutputs[3] || ''
+          topicBlocks = []
+          let parts = raw.split(/\n-{3,}\n/).filter((b: string) => b.trim())
+          if (parts.length <= 1) {
+            parts = raw.split(/(?=##\s*选题[一二三四五六七八九十\d]*[：:])/).filter((b: string) => b.trim())
+          }
+          if (parts.length <= 1) {
+            parts = raw.split(/(?=###?\s*选题方向\s*\d+|###?\s*方向\s*\d+|选题\s*\d+[：:])/).filter((b: string) => b.trim())
+          }
+          const shouldSkip = (t: string) => t.includes('选题方向建议') || t.includes('方向建议')
+          if (parts.length > 1) {
+            parts.forEach((block: string, idx: number) => {
+              const lines = block.trim().split('\n')
+              const titleLine = lines.find((l: string) => /^##\s/.test(l)) || lines[0]
+              const title = titleLine?.replace(/^#+\s*/, '').replace(/^\*\*/, '').replace(/\*\*$/, '').replace(/[✦✧★☆⭐◆◇●○♦♢🔹🔸🔄📌💡✨🎯📚📖🌟]/g, '').trim() || `选题 ${idx + 1}`
+              if (!shouldSkip(title)) {
+                topicBlocks.push({ title, content: block.trim() })
+              }
+            })
+          } else if (raw) {
+            topicBlocks.push({ title: '选题方案', content: raw })
+          }
+        }
+        
+        console.log('[Step3 确认] selectedTopicIndices:', selectedTopicIndices, 'topicBlocks 长度:', topicBlocks.length)
+        
+        const primaryTopic = topicBlocks[selectedTopicIndices[0]]?.content
+        const secondTopic = selectedTopicIndices.length > 1 ? (topicBlocks[selectedTopicIndices[1]]?.content || null) : null
+
+        console.log('[Step3 确认] primaryTopic:', primaryTopic?.length ?? 'null', 'secondTopic:', secondTopic?.length ?? 'null')
+
+        if (!primaryTopic) {
+          alert('无法定位选题内容，请重新选择')
+          setIsExecuting(false)
+          return
+        }
+
+        setSelectedTopic(primaryTopic)
+        
+        const confirmBody: Record<string, string> = { selected_topic: primaryTopic }
+        if (secondTopic) {
+          confirmBody.forked_topic = secondTopic
+        }
+        
+        console.log('[Step3 确认] 发送确认, 包含 forked_topic:', !!confirmBody.forked_topic)
+        
         const confirmRes = await fetch(`${API_BASE}/workflow/${taskId}/confirm`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ selected_topic: selectedTopic })
+          body: JSON.stringify(confirmBody)
         })
         
         if (!confirmRes.ok) {
           throw new Error('确认失败')
         }
         
+        // 检查是否创建了分叉任务
+        const confirmData = await confirmRes.json()
+        console.log('[Step3 确认] 后端响应:', JSON.stringify(confirmData).slice(0, 500))
+        
+        if (confirmData.forked_task) {
+          const forkInfo = {
+            taskId: confirmData.forked_task.task_id,
+            title: confirmData.forked_task.title
+          }
+          console.log('[Step3 确认] 分叉任务已创建:', forkInfo)
+          setForkedTaskToast(forkInfo)
+          setForkedTaskInfo(forkInfo)
+          setTimeout(() => setForkedTaskToast(null), 8000)
+        } else {
+          console.warn('[Step3 确认] 后端响应中没有 forked_task!')
+        }
+        
         // 继续执行 Step 4
         setStatus('processing')
-        executeStep(taskId, 4, { selected_topic: selectedTopic })
+        executeStep(taskId, 4, { selected_topic: primaryTopic })
         return
       }
       // Step 4: 协作文档确认 + 用户补充
@@ -944,7 +1067,12 @@ export default function WorkbenchPage() {
           </div>
         )}
         
-        {!workflowStarted ? (
+        {loadingFromUrl ? (
+          <div className="max-w-3xl mx-auto py-20 flex flex-col items-center gap-4">
+            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#3a5e98]"></div>
+            <p className="text-sm text-gray-500">正在加载任务...</p>
+          </div>
+        ) : !workflowStarted ? (
           /* ================================================================
            * 初始化面板
            * ================================================================ */
@@ -1113,6 +1241,25 @@ export default function WorkbenchPage() {
                   >
                     ← 返回当前步骤
                   </button>
+                )}
+
+                {/* 分叉任务持久链接 */}
+                {forkedTaskInfo && (
+                  <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                    <div className="flex items-center gap-2 mb-1">
+                      <svg className="w-4 h-4 text-amber-600 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                      </svg>
+                      <span className="text-xs font-medium text-amber-800">分叉任务</span>
+                    </div>
+                    <p className="text-xs text-amber-700 truncate mb-2" title={forkedTaskInfo.title}>{forkedTaskInfo.title}</p>
+                    <button
+                      onClick={() => window.open(`/workbench?task=${forkedTaskInfo.taskId}`, '_blank')}
+                      className="w-full py-1.5 text-xs font-medium text-amber-700 bg-amber-100 hover:bg-amber-200 rounded transition-colors"
+                    >
+                      打开分叉任务 →
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -1595,12 +1742,42 @@ export default function WorkbenchPage() {
                     </h2>
                     
                     <div className="space-y-4">
-                      {/* 步骤描述 */}
-                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                        <p className="text-sm text-gray-700">
-                          {WORKFLOW_STEPS[currentStep - 1]?.desc}
-                      </p>
-                    </div>
+                      {/* 步骤描述（Step 7/8 执行中时显示丰富卡片） */}
+                      {(currentStep === 7 || currentStep === 8) && !stepOutputs[currentStep] && isExecuting ? (
+                        <div className="bg-gradient-to-r from-slate-50 to-gray-50 border border-slate-200 rounded-lg p-5">
+                          <div className="flex items-start gap-3">
+                            <div className="animate-pulse mt-0.5">
+                              {currentStep === 7 ? (
+                                <svg className="w-5 h-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
+                              ) : (
+                                <svg className="w-5 h-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" /></svg>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-slate-800">
+                                {currentStep === 7 ? '正在创作初稿…' : '正在进行四遍审校…'}
+                              </p>
+                              <p className="text-sm text-slate-500 mt-1">
+                                {currentStep === 7
+                                  ? 'AI 正在深度融合调研资料与参考样文，为您撰写文章初稿。此步骤通常需要 1~2 分钟，请耐心等待。'
+                                  : 'AI 正在依次执行句式清零 → 逻辑把控 → 知识准确性核对 → 语气润色 → 排版审校，请耐心等待。'}
+                              </p>
+                              {currentStep === 7 && selectedTopic && (
+                                <div className="mt-3 bg-white border border-slate-200 rounded-md px-3 py-2">
+                                  <p className="text-xs text-slate-400 mb-0.5">当前选题</p>
+                                  <p className="text-sm text-slate-700 line-clamp-2">{selectedTopic.split('\n')[0]?.replace(/^#+\s*/, '').replace(/^\*\*/, '').replace(/\*\*$/, '')}</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
+                          <p className="text-sm text-gray-700">
+                            {WORKFLOW_STEPS[currentStep - 1]?.desc}
+                          </p>
+                        </div>
+                      )}
                     
                     {/* 步骤输出 - Step 2 特殊处理：显示摘要而非全文 */}
                     {currentStep === 2 && knowledgeSummary ? (
@@ -1750,6 +1927,9 @@ export default function WorkbenchPage() {
                             // 回退：整体显示
                             topicBlocks.push({ title: '选题方案', content })
                           }
+
+                          // 同步到 ref，供确认函数直接读取（避免重复解析导致索引不一致）
+                          topicBlocksRef.current = topicBlocks
                           
                               // 判断是否为"综合建议/推荐"类型（不需要折叠，不需要复制按钮，直接显示）
                               const isRecommendation = (title: string) => 
@@ -1761,19 +1941,60 @@ export default function WorkbenchPage() {
                               const needsCollapse = (title: string) => 
                                 topicBlocks.length > 1 && !isRecommendation(title)
                           
-                          return topicBlocks.map((topic, idx) => (
-                            <div key={idx} className="bg-white border border-gray-200 rounded-lg overflow-hidden hover:border-[#3a5e98]/50 transition-colors">
+                          return topicBlocks.map((topic, idx) => {
+                            const isSelected = selectedTopicIndices.includes(idx)
+                            const selectionOrder = selectedTopicIndices.indexOf(idx) + 1
+                            const canSelect = !isRecommendation(topic.title)
+                            
+                            const handleToggleSelect = (e: React.MouseEvent) => {
+                              e.stopPropagation()
+                              if (!canSelect) return
+                              setSelectedTopicIndices(prev => {
+                                if (prev.includes(idx)) {
+                                  return prev.filter(i => i !== idx)
+                                }
+                                if (prev.length >= 2) {
+                                  return [prev[1], idx]
+                                }
+                                return [...prev, idx]
+                              })
+                            }
+                            
+                            return (
+                            <div key={idx} className={`bg-white border-2 rounded-lg overflow-hidden transition-all ${
+                              isSelected
+                                ? 'border-[#3a5e98] shadow-md ring-1 ring-[#3a5e98]/20'
+                                : 'border-gray-200 hover:border-[#3a5e98]/50'
+                            }`}>
                               {/* 选题标题栏 */}
                               <div 
-                                className={`flex items-center justify-between px-4 py-2.5 bg-gray-50 ${
+                                className={`flex items-center justify-between px-4 py-2.5 ${
+                                  isSelected ? 'bg-[#3a5e98]/5' : 'bg-gray-50'
+                                } ${
                                   needsCollapse(topic.title) ? 'cursor-pointer hover:bg-gray-100' : ''
                                 } transition-colors`}
                                 onClick={() => needsCollapse(topic.title) && setExpandedTopics(prev => ({ ...prev, [idx]: !prev[idx] }))}
                               >
-                                <span className="text-sm font-medium text-gray-800">{topic.title}</span>
                                 <div className="flex items-center gap-2">
-                                  {/* 复制按钮 - 推荐类型不显示 */}
-                                  {!isRecommendation(topic.title) && (
+                                  {/* 选择按钮 */}
+                                  {canSelect && (
+                                    <button
+                                      onClick={handleToggleSelect}
+                                      className={`flex-shrink-0 w-6 h-6 rounded-full border-2 flex items-center justify-center text-xs font-bold transition-all ${
+                                        isSelected
+                                          ? 'bg-[#3a5e98] border-[#3a5e98] text-white'
+                                          : 'border-gray-300 text-gray-300 hover:border-[#3a5e98] hover:text-[#3a5e98]'
+                                      }`}
+                                      title={isSelected ? `已选为第 ${selectionOrder} 选题` : '点击选择此选题（最多选 2 个）'}
+                                    >
+                                      {isSelected ? selectionOrder : ''}
+                                    </button>
+                                  )}
+                                  <span className="text-sm font-medium text-gray-800">{topic.title}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {/* 复制按钮 */}
+                                  {canSelect && (
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation()
@@ -1799,7 +2020,7 @@ export default function WorkbenchPage() {
                                       )}
                                     </button>
                                   )}
-                                  {/* 展开/收起图标 - 需要折叠时才显示 */}
+                                  {/* 展开/收起图标 */}
                                   {needsCollapse(topic.title) && (
                                     <svg 
                                       className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${expandedTopics[idx] ? 'rotate-180' : ''}`} 
@@ -1822,22 +2043,58 @@ export default function WorkbenchPage() {
                                 </div>
                               )}
                             </div>
-                          ))
+                          )})
                         })()}
+                        {/* 选择状态提示 */}
+                        {selectedTopicIndices.length > 0 && (
+                          <div className="mt-3 px-4 py-2.5 bg-[#3a5e98]/5 border border-[#3a5e98]/20 rounded-lg">
+                            <p className="text-sm text-[#3a5e98]">
+                              {selectedTopicIndices.length === 1 
+                                ? '已选择 1 个选题，可再选 1 个同时创作（点击下方「下一步」继续）'
+                                : '已选择 2 个选题：第 1 个将在当前任务继续，第 2 个将自动创建新任务'}
+                            </p>
+                          </div>
+                        )}
                       </div>
                     ) : stepOutputs[currentStep] && currentStep !== 2 ? (
                       (currentStep === 7 || currentStep === 8) ? (
                         /* Step 7/8：使用 ArticleEditor 支持划词重写 */
-                        <div className="max-h-[500px] overflow-y-auto">
-                          <ArticleEditor
-                            content={stepOutputs[currentStep]}
-                            onContentChange={(newContent) => {
-                              setStepOutputs(prev => ({ ...prev, [currentStep]: newContent }))
-                            }}
-                            taskId={taskId}
-                            channelSlug={selectedChannel}
-                            contentType={currentStep === 7 ? 'draft' : 'final'}
-                          />
+                        <div>
+                          {/* Step 8 审校报告（可折叠，显示在终稿上方） */}
+                          {currentStep === 8 && auditReport && (
+                            <div className="mb-3">
+                              <button
+                                onClick={() => setAuditReportExpanded(!auditReportExpanded)}
+                                className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-lg transition-colors"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <svg className="w-4 h-4 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                                  </svg>
+                                  <span className="text-sm font-medium text-gray-700">审校报告</span>
+                                </div>
+                                <svg className={`w-4 h-4 text-gray-400 transition-transform ${auditReportExpanded ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </button>
+                              {auditReportExpanded && (
+                                <div className="mt-1 border border-gray-200 rounded-lg bg-gray-50 p-4 max-h-[300px] overflow-y-auto">
+                                  <pre className="whitespace-pre-wrap text-xs text-gray-600 font-sans leading-relaxed">{auditReport}</pre>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          <div className="max-h-[500px] overflow-y-auto">
+                            <ArticleEditor
+                              content={stepOutputs[currentStep]}
+                              onContentChange={(newContent) => {
+                                setStepOutputs(prev => ({ ...prev, [currentStep]: newContent }))
+                              }}
+                              taskId={taskId}
+                              channelSlug={selectedChannel}
+                              contentType={currentStep === 7 ? 'draft' : 'final'}
+                            />
+                          </div>
                         </div>
                       ) : (
                         <div className="prose max-w-none">
@@ -1958,26 +2215,17 @@ export default function WorkbenchPage() {
                         </div>
                       )}
                       
-                      {/* Step 3: 选题卡片 */}
+                      {/* Step 3: 选题确认 */}
                       {currentStep === 3 && (
-                        <div className="space-y-4">
+                        <div className="space-y-3">
                           <p className="text-sm text-gray-700">
-                            请仔细阅读上方 AI 生成的选题方案，选择一个最合适的方向，
-                            将完整内容粘贴到下方输入框中。
+                            点击上方选题卡片左侧的圆圈进行选择（最多选 2 个，选 2 个时将自动为第二选题创建新任务）。
                           </p>
-                            <textarea
-                            className="w-full p-3 border-2 border-gray-300 rounded-lg resize-none focus:ring-2 focus:ring-gray-400 focus:border-transparent bg-white text-xs leading-relaxed"
-                            rows={14}
-                            placeholder="请将你选择的选题完整内容粘贴到这里...
-
-例如：
-选题方向1：《窗边的小豆豆》——教育的另一种可能
-核心观点：通过小豆豆的成长故事，探讨尊重儿童天性的教育理念..."
-                              value={selectedTopic}
-                              onChange={(e) => setSelectedTopic(e.target.value)}
-                            />
-                          </div>
-                        )}
+                          {selectedTopicIndices.length === 0 && (
+                            <p className="text-sm text-amber-600">请至少选择 1 个选题</p>
+                          )}
+                        </div>
+                      )}
                       
                       {/* Step 4: 协作文档确认 + 用户补充 */}
                       {currentStep === 4 && (
@@ -2160,6 +2408,42 @@ export default function WorkbenchPage() {
                 className="w-full py-2 text-sm font-medium text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-100 transition-colors"
               >
                 取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 选题分叉 Toast 通知 */}
+      {forkedTaskToast && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-5 fade-in duration-300">
+          <div className="bg-white border border-[#3a5e98]/30 shadow-xl rounded-xl p-4 max-w-sm">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-8 h-8 bg-[#3a5e98]/10 rounded-full flex items-center justify-center">
+                <svg className="w-4 h-4 text-[#3a5e98]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-800">已创建分叉任务</p>
+                <p className="text-xs text-gray-500 mt-0.5 truncate">{forkedTaskToast.title}</p>
+                <button
+                  onClick={() => {
+                    window.open(`/workbench?task=${forkedTaskToast.taskId}`, '_blank')
+                    setForkedTaskToast(null)
+                  }}
+                  className="mt-2 text-xs text-[#3a5e98] hover:underline font-medium"
+                >
+                  在新标签页中打开
+                </button>
+              </div>
+              <button
+                onClick={() => setForkedTaskToast(null)}
+                className="flex-shrink-0 text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
               </button>
             </div>
           </div>

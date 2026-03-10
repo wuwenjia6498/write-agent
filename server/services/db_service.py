@@ -640,6 +640,77 @@ class DatabaseService:
         finally:
             db.close()
     
+    def clone_task_for_topic(
+        self,
+        source_task_id: str,
+        new_topic: str,
+        new_title: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        从现有任务克隆一个新任务（选题分叉）
+        
+        复制 Step 1~3 的所有产出，设置新选题，从 Step 4 开始。
+        用于用户在 Step 3 同时选择了 2 个选题的场景。
+        """
+        source = self.get_task(source_task_id)
+        if not source:
+            return None
+        
+        # 从源任务 brief_data 中提取 Step 1~3 共享数据
+        src_brief = source.get("brief_data", {})
+        cloned_brief = {
+            "brief": src_brief.get("brief", ""),
+            "created_at": src_brief.get("created_at", ""),
+            "step_1_output": src_brief.get("step_1_output", ""),
+            "step_2_output": src_brief.get("step_2_output", ""),
+            "step_3_output": src_brief.get("step_3_output", ""),
+            "knowledge_sources": src_brief.get("knowledge_sources", []),
+            "internal_knowledge": src_brief.get("internal_knowledge", ""),
+            "selected_topic": new_topic,
+            "forked_from": source_task_id,
+        }
+        
+        db = self.get_db()
+        try:
+            # 查频道 UUID
+            channel = db.query(Channel).filter(
+                Channel.id == source["channel_id"]
+            ).first()
+            if not channel:
+                return None
+            
+            task = WritingTask(
+                channel_id=channel.id,
+                title=new_title or f"[分叉] {source.get('title', '')}"[:200],
+                current_step=4,
+                status="processing",
+                brief_data=cloned_brief,
+                knowledge_base_data=source.get("knowledge_base_data", ""),
+                knowledge_summary=source.get("knowledge_summary", ""),
+                think_aloud_logs=[{
+                    "step": 0,
+                    "content": f"[系统] 由任务「{source.get('title', '')}」分叉而来，复用 Step 1~3 数据",
+                    "timestamp": __import__('datetime').datetime.now().isoformat()
+                }]
+            )
+            
+            db.add(task)
+            db.commit()
+            db.refresh(task)
+            
+            return {
+                "id": str(task.id),
+                "channel_id": str(task.channel_id),
+                "channel_slug": channel.slug,
+                "title": task.title,
+                "current_step": task.current_step,
+                "status": task.status,
+                "brief_data": task.brief_data,
+                "created_at": task.created_at.isoformat()
+            }
+        finally:
+            db.close()
+    
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """获取任务详情"""
         db = self.get_db()

@@ -32,7 +32,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "http://localhost:3001", 
+        "http://localhost:3001",
+        "http://localhost:3002",
         "https://write.skyline666.top",  # Vercel 生产域名
         "https://write-agent.vercel.app",  # Vercel 默认域名（备用）
     ],

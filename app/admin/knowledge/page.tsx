@@ -20,7 +20,7 @@ const CHANNEL_OPTIONS = [
 // 频道 → 资料类型的级联映射（Key 为数据库存储的英文值，Value 为前端显示的中文标签）
 const MATERIAL_TYPE_MAP: Record<string, { value: string; label: string }[]> = {
   deep_reading: [
-    { value: 'lesson_plan', label: '课程详案' },
+    { value: 'lesson_plan', label: '阅读指导卡片' },
     { value: 'article', label: '公号文' },
     { value: 'course_info', label: '课程说明资料' },
     { value: 'theory_book', label: '理论书籍' },
@@ -44,7 +44,7 @@ const ALL_MATERIAL_TYPE_LABELS: Record<string, string> = Object.values(MATERIAL_
   .flat()
   .reduce((acc, o) => ({ ...acc, [o.value]: o.label }), {} as Record<string, string>)
 
-const ACCEPT_EXTENSIONS = '.docx,.pdf'
+const ACCEPT_EXTENSIONS = '.docx,.pdf,.md'
 
 // ---- 类型定义 ----
 
@@ -181,7 +181,7 @@ function DropZone({
           <p className="text-sm font-medium">
             {files.length > 0 ? '继续添加文件' : '拖拽文件到此处，或点击选择'}
           </p>
-          <p className="text-xs">支持 .docx、.pdf 格式，可一次选择多个文件</p>
+          <p className="text-xs">支持 .docx、.pdf、.md 格式，可一次选择多个文件</p>
         </div>
       </div>
 
@@ -1007,7 +1007,7 @@ export default function AdminKnowledgePage() {
                 <CardContent>
                   <ol className="space-y-2.5 text-xs text-gray-600">
                     {[
-                      '上传文档，系统自动识别 .docx / .pdf 格式',
+                      '上传文档，系统自动识别 .docx / .pdf / .md 格式',
                       '提取全文纯文本内容',
                       '按 600 字切片（100 字重叠），保持语义连贯',
                       '调用 OpenAI Embedding 生成 1536 维语义向量',

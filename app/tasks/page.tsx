@@ -146,56 +146,52 @@ export default function TasksPage() {
             tasks.map((task) => (
               <Card key={task.id} className="border-gray-200 hover:border-gray-300 hover:shadow-sm transition-all">
                 <CardContent className="py-4">
-                  <div className="flex items-center justify-between">
-                    <Link href={`/tasks/${task.id}`} className="flex-1 min-w-0 cursor-pointer">
-                      <div className="flex items-center gap-3 mb-1">
-                        <h3 className="font-medium text-gray-900 truncate max-w-md hover:text-[#3a5e98]">
-                          {task.title || (task.brief ? (
-                            task.brief.replace(/\n/g, ' ').slice(0, 50) + (task.brief.length > 50 ? '...' : '')
-                          ) : `任务 ${task.id.slice(0, 8)}`)}
-                        </h3>
-                        <Badge variant="secondary" className="bg-gray-100 text-gray-700 flex-shrink-0">
-                          {getStatusLabel(task.status)}
-                        </Badge>
-                      </div>
+                  <Link href={`/tasks/${task.id}`} className="block cursor-pointer group">
+                    {/* 第一行：标题（列表页最多显示2行） */}
+                    <p className="font-medium text-gray-900 group-hover:text-[#3a5e98] leading-relaxed break-words mb-1.5 line-clamp-2">
+                      {task.title || (task.brief ? (
+                        task.brief.replace(/\n/g, ' ')
+                      ) : `任务 ${task.id.slice(0, 8)}`)}
+                    </p>
+                    {/* 第二行：元信息 + 进度 + 操作 */}
+                    <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3 text-sm text-gray-500">
                         <span>{task.channel_slug || '—'}</span>
                         <span>·</span>
-                        <span>Step {task.current_step}: {STEP_NAMES[task.current_step]}</span>
-                        <span>·</span>
                         <span>{new Date(task.created_at).toLocaleString()}</span>
+                        <Badge variant="secondary" className="bg-gray-100 text-gray-700">
+                          {getStatusLabel(task.status)}
+                        </Badge>
                       </div>
-                    </Link>
-                    <div className="flex items-center gap-4 ml-4">
-                      {/* 进度指示 */}
-                      <div className="flex gap-0.5">
-                        {[1,2,3,4,5,6,7,8,9].map((step) => (
-                          <div 
-                            key={step}
-                            className={`w-2 h-2 rounded-full ${
-                              step < task.current_step ? 'bg-gray-700' :
-                              step === task.current_step ? 'bg-gray-500' :
-                              'bg-gray-200'
-                            }`}
-                          />
-                        ))}
+                      <div className="flex items-center gap-4 ml-4">
+                        <div className="flex gap-0.5">
+                          {[1,2,3,4,5,6,7,8,9].map((step) => (
+                            <div 
+                              key={step}
+                              className={`w-2 h-2 rounded-full ${
+                                step < task.current_step ? 'bg-gray-700' :
+                                step === task.current_step ? 'bg-gray-500' :
+                                'bg-gray-200'
+                              }`}
+                            />
+                          ))}
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setDeletingTask(task)
+                          }}
+                          className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                          title="删除任务"
+                        >
+                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
                       </div>
-                      {/* 删除按钮 */}
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault()
-                          e.stopPropagation()
-                          setDeletingTask(task)
-                        }}
-                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                        title="删除任务"
-                      >
-                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
                     </div>
-                  </div>
+                  </Link>
                 </CardContent>
               </Card>
             ))

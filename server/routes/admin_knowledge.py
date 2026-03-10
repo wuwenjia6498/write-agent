@@ -50,7 +50,7 @@ class UploadResponse(BaseModel):
 
 @router.post("/upload", response_model=UploadResponse)
 async def upload_knowledge_file(
-    file: UploadFile = File(..., description="待上传的文档 (.docx / .pdf)"),
+    file: UploadFile = File(..., description="待上传的文档 (.docx / .pdf / .md)"),
     channel_scope: str = Form(..., description="频道范围: deep_reading / picture_books"),
     material_type: str = Form(..., description="文档类型: lesson_plan / article / course_info / theory_book / booklist / qa / guide_book / parenting_book"),
 ):

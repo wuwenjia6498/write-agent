@@ -22,8 +22,8 @@ from sqlalchemy import text as sql_text
 
 from database.config import SessionLocal
 
-# 支持的文件后缀 → Loader 映射
-SUPPORTED_EXTENSIONS = {".docx", ".pdf"}
+# 支持的文件后缀
+SUPPORTED_EXTENSIONS = {".docx", ".pdf", ".md"}
 
 
 class DocumentParserService:
@@ -35,7 +35,7 @@ class DocumentParserService:
             file_path="/tmp/xxx.docx",
             channel_scope="deep_reading",
             material_type="lesson_plan",
-            source_filename="课程详案-三年级.docx",
+            source_filename="阅读指导卡片-三年级.md",
         )
     """
 
@@ -77,15 +77,21 @@ class DocumentParserService:
         """根据文件后缀选择对应 Loader，返回纯文本列表"""
         ext = Path(file_path).suffix.lower()
 
-        if ext == ".docx":
+        if ext == ".md":
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            texts = [content] if content.strip() else []
+        elif ext == ".docx":
             loader = Docx2txtLoader(file_path)
+            docs = loader.load()
+            texts = [doc.page_content for doc in docs if doc.page_content.strip()]
         elif ext == ".pdf":
             loader = PyPDFLoader(file_path)
+            docs = loader.load()
+            texts = [doc.page_content for doc in docs if doc.page_content.strip()]
         else:
-            raise ValueError(f"不支持的文件格式: {ext}，仅支持 .docx / .pdf")
+            raise ValueError(f"不支持的文件格式: {ext}，仅支持 .docx / .pdf / .md")
 
-        docs = loader.load()
-        texts = [doc.page_content for doc in docs if doc.page_content.strip()]
         if not texts:
             raise ValueError("文件内容为空，无法解析出有效文本")
         return texts

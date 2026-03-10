@@ -26,7 +26,6 @@ class ChannelInfo(BaseModel):
     name: str
     description: str
     target_audience: Optional[str] = ""
-    brand_personality: Optional[str] = ""
 
 class ChannelConfig(BaseModel):
     """完整频道配置"""
@@ -34,7 +33,6 @@ class ChannelConfig(BaseModel):
     channel_name: str
     description: str
     target_audience: Optional[str] = ""
-    brand_personality: Optional[str] = ""
     system_prompt: Optional[Dict[str, Any]] = None
     sample_articles: Optional[List[str]] = []
     material_tags: Optional[List[str]] = []
@@ -52,7 +50,6 @@ class ChannelCreateRequest(BaseModel):
     blocked_phrases: Optional[List[str]] = None
     material_tags: Optional[List[str]] = None
     target_audience: Optional[str] = ""
-    brand_personality: Optional[str] = ""
 
 class ChannelUpdateRequest(BaseModel):
     """更新频道请求"""
@@ -64,7 +61,6 @@ class ChannelUpdateRequest(BaseModel):
     blocked_phrases: Optional[List[str]] = None
     material_tags: Optional[List[str]] = None
     target_audience: Optional[str] = None
-    brand_personality: Optional[str] = None
     is_active: Optional[bool] = None
 
 def load_channel_config(channel_id: str) -> Dict[str, Any]:
@@ -105,8 +101,7 @@ async def list_channels() -> List[ChannelInfo]:
                     slug=ch["slug"],
                     name=ch["name"],
                     description=ch.get("description", ""),
-                    target_audience="",
-                    brand_personality=""
+                    target_audience=""
                 ))
             return channels
     except Exception as e:
@@ -123,8 +118,7 @@ async def list_channels() -> List[ChannelInfo]:
                     slug=config["channel_id"],
                     name=config["channel_name"],
                     description=config["description"],
-                    target_audience=config.get("target_audience", ""),
-                    brand_personality=config.get("brand_personality", "")
+                    target_audience=config.get("target_audience", "")
                 ))
         except Exception as e:
             print(f"警告: 加载 {config_file.name} 失败: {e}")
@@ -157,7 +151,6 @@ async def get_channel_config(channel_id: str) -> ChannelConfig:
                 description=db_channel.get("description") or "",
                 # 优先从独立字段读取，回退到 system_prompt
                 target_audience=db_channel.get("target_audience") or system_prompt.get("target_audience", ""),
-                brand_personality=db_channel.get("brand_personality") or system_prompt.get("brand_personality", ""),
                 system_prompt=system_prompt,
                 sample_articles=db_channel.get("style_guide_refs") or [],
                 # 优先从独立字段读取，回退到 system_prompt
@@ -224,8 +217,7 @@ async def create_channel(request: ChannelCreateRequest) -> Dict[str, Any]:
             channel_rules=request.channel_rules,
             blocked_phrases=request.blocked_phrases,
             material_tags=request.material_tags,
-            target_audience=request.target_audience,
-            brand_personality=request.brand_personality
+            target_audience=request.target_audience
         )
         
         if result is None:
@@ -247,6 +239,7 @@ async def create_channel(request: ChannelCreateRequest) -> Dict[str, Any]:
 async def update_channel(channel_id: str, request: ChannelUpdateRequest) -> Dict[str, Any]:
     """
     更新频道信息
+    更新数据库后自动同步到 JSON 配置文件，确保工作流引擎使用最新配置
     """
     try:
         result = db_service.update_channel(
@@ -259,7 +252,6 @@ async def update_channel(channel_id: str, request: ChannelUpdateRequest) -> Dict
             blocked_phrases=request.blocked_phrases,
             material_tags=request.material_tags,
             target_audience=request.target_audience,
-            brand_personality=request.brand_personality,
             is_active=request.is_active
         )
         
@@ -268,6 +260,17 @@ async def update_channel(channel_id: str, request: ChannelUpdateRequest) -> Dict
                 status_code=404,
                 detail=f"频道 '{channel_id}' 不存在"
             )
+        
+        # 自动同步到 JSON 配置文件，确保工作流引擎读取最新数据
+        try:
+            from services.workflow_engine import workflow_engine
+            synced = workflow_engine.sync_channel_config_to_json(channel_id)
+            if synced:
+                print(f"✅ 频道 '{channel_id}' 配置已自动同步到 JSON")
+            else:
+                print(f"⚠️ 频道 '{channel_id}' 自动同步失败，工作流可能使用旧配置")
+        except Exception as sync_err:
+            print(f"⚠️ 自动同步异常（不影响数据库更新）: {sync_err}")
         
         return result
     except HTTPException:
